@@ -80,14 +80,16 @@ def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
 
     Returns columns: organisation_name (str), total_groups (int)
 
-    Note: never uses SELECT * FROM bundles — only fetches b.id and b.organisation_id.
+    Note: never uses SELECT * FROM bundles — only fetches b.id and b.user_id.
+    Relationship: bundles.user_id → users.id → users.organisation_id → organisations.id
     """
     sql = text("""
         SELECT
-            o.name      AS organisation_name,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             COUNT(b.id) AS total_groups
         FROM bundles b
-        JOIN organisations o ON o.id = b.organisation_id
+        JOIN users u ON u.id = b.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
         GROUP BY o.name
         ORDER BY o.name
     """)

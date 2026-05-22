@@ -44,7 +44,8 @@ This filter does NOT apply to login/visit-level queries.
 ## Database Schema (relevant tables)
 - users: id, email, organisation_id
 - organisations: id, name
-- bundles: id, organisation_id (do NOT use SELECT * FROM bundles - too slow, always use targeted queries)
+- bundles: id, user_id (do NOT use SELECT * FROM bundles - too slow, always use targeted queries)
+  - bundles link to orgs via: bundles.user_id → users.id → users.organisation_id → organisations.id
 - feedback_questions: id, target (groups or therapists), questions (jsonb, 1-5 stars)
 - feedback_answers: id, feedback_question_id, user_id, answers (jsonb with bundleId + sessionId in metadata)
 
