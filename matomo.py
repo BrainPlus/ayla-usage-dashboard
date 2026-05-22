@@ -119,9 +119,10 @@ def get_avg_visit_duration_by_user(date_range: str) -> pd.DataFrame:
     """
     Fetches average visit duration per user over a date range.
 
-    Matomo method: VisitsSummary.get (one call per user, segment=userId=={user_id})
-    Segment: none beyond the userId filter — visit-level, no dimension10 filter needed.
-    User list is fetched internally via get_logins_by_date_range.
+    Matomo method: Live.getLastVisitsDetails (single bulk call)
+    Segment: none — visit-level data, dimension10 filter does not apply.
+    visitDuration (seconds) is read directly from each visit object and
+    averaged per user_id in pandas.
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
@@ -129,26 +130,40 @@ def get_avg_visit_duration_by_user(date_range: str) -> pd.DataFrame:
     Returns:
         DataFrame with columns: user_id (str), avg_session_seconds (float)
     """
-    user_ids = get_logins_by_date_range(date_range)["user_id"].tolist()
+    data = matomo_get(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "filter_limit": 10000,
+        }
+    )
+
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=["user_id", "avg_session_seconds"])
 
     records = []
-    for user_id in user_ids:
-        data = matomo_get(
-            {
-                "method": "VisitsSummary.get",
-                "period": "range",
-                "date": date_range,
-                "segment": f"userId=={user_id}",
-            }
-        )
+    for visit in data:
+        user_id = visit.get("userId")
+        if not user_id:
+            continue
+        records.append({
+            "user_id": str(user_id),
+            "visit_duration": float(visit.get("visitDuration") or 0),
+        })
 
-        avg_seconds = 0.0
-        if isinstance(data, dict):
-            avg_seconds = float(data.get("avg_time_on_site") or 0)
+    if not records:
+        return pd.DataFrame(columns=["user_id", "avg_session_seconds"])
 
-        records.append({"user_id": str(user_id), "avg_session_seconds": avg_seconds})
-
-    return pd.DataFrame(records, columns=["user_id", "avg_session_seconds"])
+    df = pd.DataFrame(records)
+    result = (
+        df.groupby("user_id")["visit_duration"]
+        .mean()
+        .fillna(0.0)
+        .reset_index()
+        .rename(columns={"visit_duration": "avg_session_seconds"})
+    )
+    return result
 
 
 def get_sessions_delivered(date_range: str) -> pd.DataFrame:
