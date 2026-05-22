@@ -155,11 +155,12 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     """
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false (CRITICAL — excludes prepare/edit mode visits)
+    Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
+    Delivered-only filter: actions where dimension10 == "false" are included;
+    dimension10 == "true" (prepare/edit mode) are skipped.
 
-    Custom dimensions are extracted from visit-level keys first, then from
-    actionDetails if not present at visit level.
+    bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
+    session_id comes from dimension5.
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
@@ -173,7 +174,6 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
             "filter_limit": 10000,
         }
     )
@@ -184,26 +184,15 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     records = []
     for visit in data:
         user_id = str(visit.get("userId", ""))
-
-        # Try visit-level dimensions first
-        bundle_id = _extract_dimension(visit, "4")
-        session_id = _extract_dimension(visit, "5")
-
-        if bundle_id and session_id:
-            records.append(
-                {"bundle_id": bundle_id, "session_id": session_id, "user_id": user_id}
-            )
-        else:
-            # Fall back to action-level dimensions (dimensions set per-event)
-            seen = set()
-            for action in visit.get("actionDetails", []):
-                b = _extract_dimension(action, "4")
-                s = _extract_dimension(action, "5")
-                if b and s and (b, s) not in seen:
-                    seen.add((b, s))
-                    records.append(
-                        {"bundle_id": b, "session_id": s, "user_id": user_id}
-                    )
+        seen = set()
+        for action in visit.get("actionDetails", []):
+            if _extract_dimension(action, "10") != "false":
+                continue
+            b = _extract_dimension(action, "14")
+            s = _extract_dimension(action, "5")
+            if b and s and (b, s) not in seen:
+                seen.add((b, s))
+                records.append({"bundle_id": b, "session_id": s, "user_id": user_id})
 
     return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
 
@@ -212,10 +201,9 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
     """
     Counts completed activities per user in delivered sessions only.
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false (CRITICAL — delivered sessions only)
-    Counts actionDetails entries where type="event", eventCategory="Activity",
-    eventAction="Activity Complete".
+    Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
+    Counts actions where type="event", eventCategory="Activity",
+    eventAction="Activity Complete", AND dimension10=="false" (deliver mode only).
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
@@ -228,7 +216,6 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
             "filter_limit": 10000,
         }
     )
@@ -241,7 +228,8 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
         user_id = str(visit.get("userId", ""))
         for action in visit.get("actionDetails", []):
             if (
-                action.get("type") == "event"
+                _extract_dimension(action, "10") == "false"
+                and action.get("type") == "event"
                 and action.get("eventCategory") == "Activity"
                 and action.get("eventAction") == "Activity Complete"
             ):
@@ -260,12 +248,18 @@ def _extract_dimension(obj: dict, dim_number: str) -> str:
     """
     Extract a custom dimension value from a Matomo visit or action dict.
 
-    Handles two response shapes Matomo uses:
-      - Flat key:  {"customDimension4": "value"}
-      - Nested:    {"customDimensions": {"4": {"value": "..."}} }
-      - Array:     {"customDimensions": [{"index": 4, "value": "..."}]}
+    Handles four response shapes observed in the Live API:
+      - Shape 1 (action-level): {"dimension4": "value"}          ← Live API actionDetails
+      - Shape 2 (visit-level):  {"customDimension4": "value"}
+      - Shape 3 (nested dict):  {"customDimensions": {"4": {"value": "..."}} }
+      - Shape 4 (array):        {"customDimensions": [{"index": 4, "value": "..."}]}
     """
-    # Flat key (e.g. "customDimension4")
+    # Shape 1: bare "dimensionN" key — used in Live API actionDetails
+    bare = obj.get(f"dimension{dim_number}", "")
+    if bare:
+        return str(bare)
+
+    # Shape 2: "customDimensionN" flat key
     flat = obj.get(f"customDimension{dim_number}", "")
     if flat:
         return str(flat)
@@ -274,10 +268,12 @@ def _extract_dimension(obj: dict, dim_number: str) -> str:
     if not dims:
         return ""
 
+    # Shape 3: nested dict {"4": {"value": "..."}}
     if isinstance(dims, dict):
         entry = dims.get(dim_number, {})
         return entry.get("value", "") if isinstance(entry, dict) else str(entry)
 
+    # Shape 4: array [{"index": 4, "value": "..."}]
     if isinstance(dims, list):
         for item in dims:
             if str(item.get("index", "")) == dim_number:

@@ -27,7 +27,8 @@ Streamlit web app for the Ayla CST Assistant product team. Pulls analytics from 
   - dimension1: appVersion
   - dimension2: language
   - dimension3: offline
-  - dimension4: bundleId
+  - dimension4: bundleId (Matomo route param — not the DB integer ID)
+  - dimension14: customBundleId (DB integer bundle ID — use this for joins)
   - dimension5: sessionId
   - dimension6: activityId
   - dimension7: stepId
