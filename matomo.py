@@ -1,3 +1,298 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
-# Reads st.secrets["matomo_url"], st.secrets["matomo_token"], st.secrets["matomo_site_id"] (top-level, shared across regions).
 # ALWAYS include segment=customDimension10==false for session/activity/step event queries.
+
+import io
+
+import pandas as pd
+import requests
+import streamlit as st
+
+MATOMO_URL = st.secrets["matomo_url"]
+TOKEN = st.secrets["matomo_token"]
+SITE_ID = st.secrets["matomo_site_id"]
+
+_BASE_PARAMS = {
+    "module": "API",
+    "idSite": SITE_ID,
+    "token_auth": TOKEN,
+}
+
+
+def matomo_get(params: dict, expect_csv: bool = False):
+    """Make a Matomo API GET request, merging base params. Returns parsed JSON or raw CSV text."""
+    merged = {**_BASE_PARAMS, **params}
+    if expect_csv:
+        merged["format"] = "CSV"
+    else:
+        merged.setdefault("format", "JSON")
+
+    response = requests.get(MATOMO_URL, params=merged, timeout=60)
+    response.raise_for_status()
+
+    if expect_csv:
+        return response.text
+    return response.json()
+
+
+def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
+    """
+    Fetches unique user logins within a date range.
+
+    Matomo method: UserId.getUsers
+    Segment: none (visit-level query — dimension10 filter does not apply)
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: user_id (str), visits (int)
+    """
+    csv_text = matomo_get(
+        {
+            "method": "UserId.getUsers",
+            "period": "range",
+            "date": date_range,
+            "filter_limit": 10000,
+        },
+        expect_csv=True,
+    )
+
+    df = pd.read_csv(io.StringIO(csv_text))
+    # Matomo CSV uses "label" for the user identifier and "nb_visits" for visit count
+    df = df.rename(columns={"label": "user_id", "nb_visits": "visits"})
+    df["user_id"] = df["user_id"].astype(str)
+    df["visits"] = pd.to_numeric(df["visits"], errors="coerce").fillna(0).astype(int)
+
+    return df[["user_id", "visits"]].reset_index(drop=True)
+
+
+def get_last_login_per_user(
+    user_ids: list[str], progress_callback=None
+) -> pd.DataFrame:
+    """
+    Fetches the most recent login date for each user.
+
+    Matomo method: Live.getLastVisitsDetails (one call per user)
+    Segment: userId=={user_id} — visit-level, no dimension10 filter needed.
+
+    Args:
+        user_ids: list of user ID strings
+        progress_callback: optional callable(current: int, total: int)
+
+    Returns:
+        DataFrame with columns: user_id (str), last_login_date (str "YYYY-MM-DD")
+    """
+    records = []
+    total = len(user_ids)
+
+    for i, user_id in enumerate(user_ids):
+        if progress_callback:
+            progress_callback(i, total)
+
+        data = matomo_get(
+            {
+                "method": "Live.getLastVisitsDetails",
+                "period": "range",
+                "date": "last365",
+                "segment": f"userId=={user_id}",
+                "countVisitorsToFetch": 1,
+                "doNotFetchActions": 1,
+                "filter_limit": 1,
+            }
+        )
+
+        last_login_date = ""
+        if isinstance(data, list) and data:
+            visit = data[0]
+            raw = visit.get("lastActionDateTime") or visit.get("serverDate", "")
+            last_login_date = raw[:10] if raw else ""
+
+        records.append({"user_id": str(user_id), "last_login_date": last_login_date})
+
+    if progress_callback:
+        progress_callback(total, total)
+
+    return pd.DataFrame(records, columns=["user_id", "last_login_date"])
+
+
+def get_avg_visit_duration_by_user(date_range: str) -> pd.DataFrame:
+    """
+    Fetches average visit duration per user over a date range.
+
+    Matomo method: VisitsSummary.get (one call per user, segment=userId=={user_id})
+    Segment: none beyond the userId filter — visit-level, no dimension10 filter needed.
+    User list is fetched internally via get_logins_by_date_range.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: user_id (str), avg_session_seconds (float)
+    """
+    user_ids = get_logins_by_date_range(date_range)["user_id"].tolist()
+
+    records = []
+    for user_id in user_ids:
+        data = matomo_get(
+            {
+                "method": "VisitsSummary.get",
+                "period": "range",
+                "date": date_range,
+                "segment": f"userId=={user_id}",
+            }
+        )
+
+        avg_seconds = 0.0
+        if isinstance(data, dict):
+            avg_seconds = float(data.get("avg_time_on_site") or 0)
+
+        records.append({"user_id": str(user_id), "avg_session_seconds": avg_seconds})
+
+    return pd.DataFrame(records, columns=["user_id", "avg_session_seconds"])
+
+
+def get_sessions_delivered(date_range: str) -> pd.DataFrame:
+    """
+    Fetches delivered session instances as (bundleId, sessionId, userId) rows.
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false (CRITICAL — excludes prepare/edit mode visits)
+
+    Custom dimensions are extracted from visit-level keys first, then from
+    actionDetails if not present at visit level.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: bundle_id (str), session_id (str), user_id (str)
+        Deduplicate on (bundle_id, session_id, user_id) before counting.
+    """
+    data = matomo_get(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+            "filter_limit": 10000,
+        }
+    )
+
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=["bundle_id", "session_id", "user_id"])
+
+    records = []
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+
+        # Try visit-level dimensions first
+        bundle_id = _extract_dimension(visit, "4")
+        session_id = _extract_dimension(visit, "5")
+
+        if bundle_id and session_id:
+            records.append(
+                {"bundle_id": bundle_id, "session_id": session_id, "user_id": user_id}
+            )
+        else:
+            # Fall back to action-level dimensions (dimensions set per-event)
+            seen = set()
+            for action in visit.get("actionDetails", []):
+                b = _extract_dimension(action, "4")
+                s = _extract_dimension(action, "5")
+                if b and s and (b, s) not in seen:
+                    seen.add((b, s))
+                    records.append(
+                        {"bundle_id": b, "session_id": s, "user_id": user_id}
+                    )
+
+    return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
+
+
+def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
+    """
+    Counts completed activities per user in delivered sessions only.
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false (CRITICAL — delivered sessions only)
+    Counts actionDetails entries where type="event", eventCategory="Activity",
+    eventAction="Activity Complete".
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: user_id (str), activities_completed (int)
+    """
+    data = matomo_get(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+            "filter_limit": 10000,
+        }
+    )
+
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=["user_id", "activities_completed"])
+
+    counts: dict[str, int] = {}
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        for action in visit.get("actionDetails", []):
+            if (
+                action.get("type") == "event"
+                and action.get("eventCategory") == "Activity"
+                and action.get("eventAction") == "Activity Complete"
+            ):
+                counts[user_id] = counts.get(user_id, 0) + 1
+
+    records = [
+        {"user_id": uid, "activities_completed": cnt} for uid, cnt in counts.items()
+    ]
+    return pd.DataFrame(records, columns=["user_id", "activities_completed"])
+
+
+# --- helpers ---
+
+
+def _extract_dimension(obj: dict, dim_number: str) -> str:
+    """
+    Extract a custom dimension value from a Matomo visit or action dict.
+
+    Handles two response shapes Matomo uses:
+      - Flat key:  {"customDimension4": "value"}
+      - Nested:    {"customDimensions": {"4": {"value": "..."}} }
+      - Array:     {"customDimensions": [{"index": 4, "value": "..."}]}
+    """
+    # Flat key (e.g. "customDimension4")
+    flat = obj.get(f"customDimension{dim_number}", "")
+    if flat:
+        return str(flat)
+
+    dims = obj.get("customDimensions")
+    if not dims:
+        return ""
+
+    if isinstance(dims, dict):
+        entry = dims.get(dim_number, {})
+        return entry.get("value", "") if isinstance(entry, dict) else str(entry)
+
+    if isinstance(dims, list):
+        for item in dims:
+            if str(item.get("index", "")) == dim_number:
+                return str(item.get("value", ""))
+
+    return ""
+
+
+if __name__ == "__main__":
+    from datetime import date, timedelta
+
+    today = date.today()
+    week_ago = today - timedelta(days=7)
+    date_range = f"{week_ago},{today}"
+
+    print(f"Fetching logins for {date_range} ...")
+    df = get_logins_by_date_range(date_range)
+    print(df.head())
