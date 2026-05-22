@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xxd /Users/elishangoma/Desktop/ayla-usage-dashboard/.streamlit/secrets.toml)"
+    ]
+  }
+}
