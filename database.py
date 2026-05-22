@@ -1,29 +1,27 @@
 # All PostgreSQL queries: users, organisations, bundles, feedback_questions, feedback_answers.
 # Never use SELECT * FROM bundles — always write targeted queries.
 
-import psycopg2
 import pandas as pd
 import streamlit as st
+from sqlalchemy import create_engine, text
 
 
-def get_connection(region: str):
+def get_engine(region: str):
     """
-    Opens a psycopg2 connection for the given region using st.secrets[region].
+    Returns a SQLAlchemy engine for the given region using st.secrets[region].
 
     Args:
         region: "uk" or "eu"
 
     Returns:
-        psycopg2 connection (caller is responsible for closing via try/finally)
+        sqlalchemy.engine.Engine (postgresql+psycopg2 dialect)
     """
     cfg = st.secrets[region]
-    return psycopg2.connect(
-        host=cfg["db_host"],
-        port=int(cfg["db_port"]),
-        dbname=cfg["db_name"],
-        user=cfg["db_user"],
-        password=cfg["db_password"],
+    url = (
+        f"postgresql+psycopg2://{cfg['db_user']}:{cfg['db_password']}"
+        f"@{cfg['db_host']}:{cfg['db_port']}/{cfg['db_name']}"
     )
+    return create_engine(url)
 
 
 def load_users_and_orgs(region: str) -> pd.DataFrame:
@@ -35,7 +33,7 @@ def load_users_and_orgs(region: str) -> pd.DataFrame:
 
     Users with no organisation are labelled "Unassigned / No organisation".
     """
-    sql = """
+    sql = text("""
         SELECT
             u.id            AS user_id,
             u.email,
@@ -43,12 +41,9 @@ def load_users_and_orgs(region: str) -> pd.DataFrame:
         FROM users u
         LEFT JOIN organisations o ON o.id = u.organisation_id
         ORDER BY u.id
-    """
-    conn = get_connection(region)
-    try:
+    """)
+    with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    finally:
-        conn.close()
 
     df["user_id"] = df["user_id"].astype(str)
     df["organisation_name"] = df["organisation_name"].fillna("Unassigned / No organisation")
@@ -64,7 +59,7 @@ def get_org_user_counts(region: str) -> pd.DataFrame:
     Returns columns: organisation_name (str), user_count (int)
     Users with no organisation are counted under "Unassigned / No organisation".
     """
-    sql = """
+    sql = text("""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             COUNT(u.id)                                       AS user_count
@@ -72,12 +67,9 @@ def get_org_user_counts(region: str) -> pd.DataFrame:
         LEFT JOIN organisations o ON o.id = u.organisation_id
         GROUP BY organisation_name
         ORDER BY organisation_name
-    """
-    conn = get_connection(region)
-    try:
+    """)
+    with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    finally:
-        conn.close()
 
     return df
 
@@ -90,7 +82,7 @@ def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
 
     Note: never uses SELECT * FROM bundles — only fetches b.id and b.organisation_id.
     """
-    sql = """
+    sql = text("""
         SELECT
             o.name      AS organisation_name,
             COUNT(b.id) AS total_groups
@@ -98,12 +90,9 @@ def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
         JOIN organisations o ON o.id = b.organisation_id
         GROUP BY o.name
         ORDER BY o.name
-    """
-    conn = get_connection(region)
-    try:
+    """)
+    with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    finally:
-        conn.close()
 
     return df
 
@@ -120,7 +109,7 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
     Returns columns:
         organisation_name (str), target (str), avg_rating (float), total_responses (int)
     """
-    sql = """
+    sql = text("""
         SELECT
             o.name                              AS organisation_name,
             fq.target,
@@ -133,12 +122,9 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
         GROUP BY o.name, fq.target
         ORDER BY o.name
-    """
-    conn = get_connection(region)
-    try:
+    """)
+    with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    finally:
-        conn.close()
 
     return df
 
@@ -155,7 +141,7 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
-    sql = """
+    sql = text("""
         SELECT
             TO_CHAR(fa.created_at, 'YYYY-MM')   AS month,
             o.name                               AS organisation_name,
@@ -169,12 +155,9 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
         GROUP BY month, o.name, fq.target
         ORDER BY month, o.name
-    """
-    conn = get_connection(region)
-    try:
+    """)
+    with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    finally:
-        conn.close()
 
     return df
 
