@@ -139,6 +139,20 @@ To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automati
 
 ---
 
+## Documentation
+
+Detailed reference for every function and the overall data flow:
+
+| File | Contents |
+|------|----------|
+| [docs/architecture.md](docs/architecture.md) | Data flow diagram, Matomo API methods, DB join relationships, dimension10 filter explanation |
+| [docs/matomo.md](docs/matomo.md) | All functions in `matomo.py` |
+| [docs/database.md](docs/database.md) | All functions in `database.py` |
+| [docs/merger.md](docs/merger.md) | All functions in `merger.py` |
+| [docs/exporter.md](docs/exporter.md) | All functions in `exporter.py` |
+
+---
+
 ## Access
 
 **Dashboard access** is managed via the sharing settings in Streamlit Community Cloud. Contact the team admin to be added.
