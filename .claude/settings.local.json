@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xxd /Users/elishangoma/Desktop/ayla-usage-dashboard/.streamlit/secrets.toml)"
+      "Bash(xxd /Users/elishangoma/Desktop/ayla-usage-dashboard/.streamlit/secrets.toml)",
+      "Bash(git -C /Users/rasmus/Documents/repos/ayla-usage-dashboard remote -v)",
+      "Bash(gh issue create --repo BrainPlus/ayla-usage-dashboard --title 'Improve session time metrics: mode separation and duration bands' --body ' *)",
+      "Bash(gh issue create --repo BrainPlus/ayla-usage-dashboard --title 'Classify visits and add session-duration metrics' --body ' *)",
+      "Bash(gh issue create --repo BrainPlus/ayla-usage-dashboard --title 'Add dashboard column definitions via tooltips' --body ' *)"
     ]
   }
 }

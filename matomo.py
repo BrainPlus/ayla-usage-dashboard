@@ -17,6 +17,8 @@ _BASE_PARAMS = {
     "token_auth": TOKEN,
 }
 
+REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+
 
 def matomo_get(params: dict, expect_csv: bool = False):
     """Make a Matomo API GET request, merging base params. Returns parsed JSON or raw CSV text."""
@@ -171,8 +173,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
-    Delivered-only filter: actions where dimension10 == "false" are included;
-    dimension10 == "true" (prepare/edit mode) are skipped.
+    Delivered-only filter: only visits longer than 20 minutes are considered
+    real sessions, and only actions where dimension10 == "false" are included;
+    dimension10 == "true" (prepare/edit mode) actions are skipped.
 
     bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
     session_id comes from dimension5.
@@ -198,6 +201,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
 
     records = []
     for visit in data:
+        if float(visit.get("visitDuration") or 0) <= REAL_SESSION_MIN_DURATION_SECONDS:
+            continue
+
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
