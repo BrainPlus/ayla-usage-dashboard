@@ -133,6 +133,26 @@ def test_user_with_no_visits_gets_zero_duration_metrics() -> None:
     assert row["short_visit_count"] == 0
 
 
+def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() -> None:
+    with pd.option_context("future.no_silent_downcasting", True):
+        user_detail = _build_user_detail(_visit_durations([]))
+
+        assert user_detail["avg_real_session_minutes"].dtype == "float64"
+        assert user_detail["avg_prepare_minutes"].dtype == "float64"
+
+        org_summary = merger.build_org_summary(
+            user_detail,
+            _empty(["bundle_id", "session_id", "user_id"]),
+            _empty(["bundle_id", "session_id", "user_id"]),
+            _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+            pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        )
+
+    row = org_summary.iloc[0]
+    assert row["avg_real_session_minutes"] == 0.0
+    assert row["avg_prepare_minutes"] == 0.0
+
+
 def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
     db_users = pd.DataFrame(
         [

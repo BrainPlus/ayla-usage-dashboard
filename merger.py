@@ -52,8 +52,16 @@ def build_user_detail(
     df["logins_30_days"] = df["logins_30_days"].fillna(0).astype(int)
     df["logins_90_days"] = df["logins_90_days"].fillna(0).astype(int)
     df["last_login_date"] = df["last_login_date"].fillna(_NO_USAGE)
-    df["avg_real_session_minutes"] = df["avg_real_session_minutes"].fillna(0.0)
-    df["avg_prepare_minutes"] = df["avg_prepare_minutes"].fillna(0.0)
+    df["avg_real_session_minutes"] = (
+        pd.to_numeric(df["avg_real_session_minutes"], errors="coerce")
+        .fillna(0.0)
+        .astype(float)
+    )
+    df["avg_prepare_minutes"] = (
+        pd.to_numeric(df["avg_prepare_minutes"], errors="coerce")
+        .fillna(0.0)
+        .astype(float)
+    )
     df["short_visit_count"] = df["short_visit_count"].fillna(0).astype(int)
     df["activities_completed"] = df["activities_completed"].fillna(0).astype(int)
 

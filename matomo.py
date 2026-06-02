@@ -7,6 +7,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+
 
 def _base_params() -> dict:
     return {
@@ -166,8 +168,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
-    Delivered-only filter: only actions where dimension10 == "false" are
-    included; dimension10 == "true" (prepare/edit mode) actions are skipped.
+    Real delivered-session filter: only visits longer than 20 minutes are
+    eligible, and only actions where dimension10 == "false" are included;
+    dimension10 == "true" (prepare/edit mode) actions are skipped.
 
     bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
     session_id comes from dimension5.
@@ -193,6 +196,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
 
     records = []
     for visit in data:
+        visit_duration_seconds = float(visit.get("visitDuration") or 0)
+        if visit_duration_seconds <= REAL_SESSION_MIN_DURATION_SECONDS:
+            continue
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
