@@ -11,6 +11,14 @@ import exporter
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
 
+def _column_config_for(dataframe, column_config):
+    return {
+        column_name: config
+        for column_name, config in column_config.items()
+        if column_name in dataframe.columns
+    }
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -192,15 +200,66 @@ else:
     with tab2:
         st.subheader("By Organisation")
         st.dataframe(
-            org_summary.style.format(
-                {
-                    "avg_real_session_minutes": "{:.1f}",
-                    "avg_prepare_minutes":      "{:.1f}",
-                    "groups_avg_rating":        "{:.2f}",
-                    "therapists_avg_rating":    "{:.2f}",
-                },
-                na_rep="—",
-            ),
+            org_summary,
+            column_config=_column_config_for(org_summary, {
+                "organisation_name": st.column_config.TextColumn(
+                    help="Name of the care provider organisation",
+                ),
+                "total_users": st.column_config.NumberColumn(
+                    help="Total number of registered users in this organisation",
+                ),
+                "active_users_30": st.column_config.NumberColumn(
+                    help="Users with 2 or more logins in the 30-day window",
+                ),
+                "logins_30_days": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the 30-day window",
+                ),
+                "logins_90_days": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                ),
+                "avg_real_session_minutes": st.column_config.NumberColumn(
+                    help=(
+                        "Mean duration (minutes) of deliver-mode visits over 20 minutes "
+                        "— treated as genuine CST session deliveries"
+                    ),
+                    format="%.1f",
+                ),
+                "avg_prepare_minutes": st.column_config.NumberColumn(
+                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                    format="%.1f",
+                ),
+                "short_visit_count": st.column_config.NumberColumn(
+                    help=(
+                        "Count of deliver-mode visits 20 minutes or under — treated as check-ins "
+                        "or browsing, not real sessions"
+                    ),
+                ),
+                "sessions_delivered_30_days": st.column_config.NumberColumn(
+                    help=(
+                        "Unique CST therapy sessions delivered in the 30-day window — counted as "
+                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
+                        "Different unit from visit-based duration metrics."
+                    ),
+                ),
+                "sessions_delivered_90_days": st.column_config.NumberColumn(
+                    help=(
+                        "Unique CST therapy sessions delivered in the 90-day window — counted as "
+                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
+                        "Different unit from visit-based duration metrics."
+                    ),
+                ),
+                "last_login_date": st.column_config.DateColumn(
+                    help="Most recent Matomo visit date for any user in this organisation",
+                ),
+                "groups_avg_rating": st.column_config.NumberColumn(
+                    help="Average 1–5 star rating submitted by patient groups at end of session",
+                    format="%.2f",
+                ),
+                "therapists_avg_rating": st.column_config.NumberColumn(
+                    help="Average 1–5 star rating submitted by therapists after session",
+                    format="%.2f",
+                ),
+            }),
             use_container_width=True,
         )
 
@@ -215,7 +274,50 @@ else:
                 user_detail["organisation_name"].str.contains(org_filter, case=False, na=False)
             ]
         )
-        st.dataframe(filtered, use_container_width=True)
+        st.dataframe(
+            filtered,
+            column_config=_column_config_for(filtered, {
+                "user_id": st.column_config.NumberColumn(
+                    help="Internal user ID",
+                ),
+                "email": st.column_config.TextColumn(
+                    help="User email address",
+                ),
+                "organisation_name": st.column_config.TextColumn(
+                    help="Organisation this user belongs to",
+                ),
+                "last_login_date": st.column_config.DateColumn(
+                    help="Most recent recorded Matomo visit date",
+                ),
+                "logins_30_days": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the 30-day window",
+                ),
+                "logins_90_days": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                ),
+                "avg_real_session_minutes": st.column_config.NumberColumn(
+                    help=(
+                        "Mean duration (minutes) of deliver-mode visits over 20 minutes "
+                        "— treated as genuine CST session deliveries"
+                    ),
+                    format="%.1f",
+                ),
+                "avg_prepare_minutes": st.column_config.NumberColumn(
+                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                    format="%.1f",
+                ),
+                "short_visit_count": st.column_config.NumberColumn(
+                    help=(
+                        "Count of deliver-mode visits 20 minutes or under — treated as check-ins "
+                        "or browsing"
+                    ),
+                ),
+                "activities_completed": st.column_config.NumberColumn(
+                    help="Count of Activity Complete events in deliver-mode sessions",
+                ),
+            }),
+            use_container_width=True,
+        )
 
 
 # ── download button ───────────────────────────────────────────────────────────
