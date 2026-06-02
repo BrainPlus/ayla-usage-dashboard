@@ -248,7 +248,7 @@ else:
                         "Different unit from visit-based duration metrics."
                     ),
                 ),
-                "last_login_date": st.column_config.DateColumn(
+                "last_login_date": st.column_config.TextColumn(
                     help="Most recent Matomo visit date for any user in this organisation",
                 ),
                 "groups_avg_rating": st.column_config.NumberColumn(
@@ -277,7 +277,7 @@ else:
         st.dataframe(
             filtered,
             column_config=_column_config_for(filtered, {
-                "user_id": st.column_config.NumberColumn(
+                "user_id": st.column_config.TextColumn(
                     help="Internal user ID",
                 ),
                 "email": st.column_config.TextColumn(
@@ -286,7 +286,7 @@ else:
                 "organisation_name": st.column_config.TextColumn(
                     help="Organisation this user belongs to",
                 ),
-                "last_login_date": st.column_config.DateColumn(
+                "last_login_date": st.column_config.TextColumn(
                     help="Most recent recorded Matomo visit date",
                 ),
                 "logins_30_days": st.column_config.NumberColumn(
