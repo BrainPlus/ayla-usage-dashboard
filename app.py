@@ -28,18 +28,23 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_sessions_delivered(date_range: str):
-    return matomo.get_sessions_delivered(date_range)
+def _cached_raw_visits(date_range: str):
+    return matomo._get_raw_visits(date_range)
 
 
 @st.cache_data(ttl=3600)
-def _cached_activity_completions(date_range: str):
-    return matomo.get_activity_completions_per_user(date_range)
+def _cached_sessions_delivered(date_range: str, raw_visits: list | None = None):
+    return matomo.get_sessions_delivered(date_range, raw_visits=raw_visits)
 
 
 @st.cache_data(ttl=3600)
-def _cached_visit_durations(date_range: str):
-    return matomo.get_visit_durations(date_range)
+def _cached_activity_completions(date_range: str, raw_visits: list | None = None):
+    return matomo.get_activity_completions_per_user(date_range, raw_visits=raw_visits)
+
+
+@st.cache_data(ttl=3600)
+def _cached_visit_durations(date_range: str, raw_visits: list | None = None):
+    return matomo.get_visit_durations(date_range, raw_visits=raw_visits)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -82,9 +87,12 @@ if pull:
         with st.spinner("Fetching Matomo analytics..."):
             logins_30 = _cached_logins(date_range_30)
             logins_90 = _cached_logins(date_range_90)
-            sessions_30 = _cached_sessions_delivered(date_range_30)
+            raw_visits_30 = _cached_raw_visits(date_range_30)
+            sessions_30 = _cached_sessions_delivered(date_range_30, raw_visits_30)
             sessions_90 = _cached_sessions_delivered(date_range_90)
-            activity_completions = _cached_activity_completions(date_range_30)
+            activity_completions = _cached_activity_completions(
+                date_range_30, raw_visits_30
+            )
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = sorted(
@@ -109,7 +117,7 @@ if pull:
 
         # Step 4 — Visit durations
         with st.spinner("Fetching session durations..."):
-            visit_durations = _cached_visit_durations(date_range_30)
+            visit_durations = _cached_visit_durations(date_range_30, raw_visits_30)
 
         # Step 5 — Build merged DataFrames
         with st.spinner("Building report..."):

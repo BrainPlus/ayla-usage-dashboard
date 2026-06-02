@@ -32,6 +32,18 @@ def matomo_get(params: dict, expect_csv: bool = False):
     return response.json()
 
 
+def _get_raw_visits(date_range: str) -> list:
+    data = matomo_get(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "filter_limit": 10000,
+        }
+    )
+    return data if isinstance(data, list) else []
+
+
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     """
     Fetches unique user logins within a date range.
@@ -113,7 +125,7 @@ def get_last_login_per_user(
     return pd.DataFrame(records, columns=["user_id", "last_login_date"])
 
 
-def get_visit_durations(date_range: str) -> pd.DataFrame:
+def get_visit_durations(date_range: str, raw_visits: list | None = None) -> pd.DataFrame:
     """
     Fetches raw visit durations over a date range.
 
@@ -129,17 +141,7 @@ def get_visit_durations(date_range: str) -> pd.DataFrame:
             user_id (str), visit_duration_seconds (float), has_deliver_action (bool)
     """
     columns = ["user_id", "visit_duration_seconds", "has_deliver_action"]
-    data = matomo_get(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-            "filter_limit": 10000,
-        }
-    )
-
-    if not isinstance(data, list):
-        return pd.DataFrame(columns=columns)
+    data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
 
     records = []
     for visit in data:
@@ -161,7 +163,7 @@ def get_visit_durations(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def get_sessions_delivered(date_range: str) -> pd.DataFrame:
+def get_sessions_delivered(date_range: str, raw_visits: list | None = None) -> pd.DataFrame:
     """
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
@@ -179,17 +181,7 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
         DataFrame with columns: bundle_id (str), session_id (str), user_id (str)
         Deduplicate on (bundle_id, session_id, user_id) before counting.
     """
-    data = matomo_get(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-            "filter_limit": 10000,
-        }
-    )
-
-    if not isinstance(data, list):
-        return pd.DataFrame(columns=["bundle_id", "session_id", "user_id"])
+    data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
 
     records = []
     for visit in data:
@@ -207,7 +199,7 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
 
 
-def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
+def get_activity_completions_per_user(date_range: str, raw_visits: list | None = None) -> pd.DataFrame:
     """
     Counts completed activities per user in delivered sessions only.
 
@@ -221,17 +213,7 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
     Returns:
         DataFrame with columns: user_id (str), activities_completed (int)
     """
-    data = matomo_get(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-            "filter_limit": 10000,
-        }
-    )
-
-    if not isinstance(data, list):
-        return pd.DataFrame(columns=["user_id", "activities_completed"])
+    data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
 
     counts: dict[str, int] = {}
     for visit in data:

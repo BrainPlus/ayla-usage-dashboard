@@ -8,7 +8,7 @@ Two sentinel constants are used throughout:
 
 ---
 
-### build_user_detail(db_users, logins_30, logins_90, last_login, avg_duration, activity_completions)
+### build_user_detail(db_users, logins_30, logins_90, last_login, visit_durations, activity_completions)
 
 **Purpose:** Builds the per-user detail table by left-joining all Matomo metrics onto the canonical DB user list.
 
@@ -17,7 +17,7 @@ Two sentinel constants are used throughout:
 - `logins_30` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 30-day window
 - `logins_90` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 90-day window
 - `last_login` *(DataFrame)* — `user_id`, `last_login_date` from `matomo.get_last_login_per_user`
-- `avg_duration` *(DataFrame)* — `user_id`, `avg_session_seconds` from `matomo.get_avg_visit_duration_by_user`
+- `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations`
 - `activity_completions` *(DataFrame)* — `user_id`, `activities_completed` from `matomo.get_activity_completions_per_user`
 
 **Returns:** DataFrame with columns:
@@ -27,10 +27,12 @@ Two sentinel constants are used throughout:
 - `last_login_date` (str) — `"No tracked usage"` if never seen in Matomo
 - `logins_30_days` (int) — 0 if not in Matomo
 - `logins_90_days` (int) — 0 if not in Matomo
-- `avg_session_minutes` (float, 1 decimal) — derived from `avg_session_seconds / 60`
+- `avg_real_session_minutes` (float, 1 decimal) — mean duration for deliver visits over 20 minutes
+- `avg_prepare_minutes` (float, 1 decimal) — mean duration for prepare-only visits
+- `short_visit_count` (int) — count of deliver visits lasting 20 minutes or less
 - `activities_completed` (int) — 0 if not in Matomo
 
-**Notes:** All joins are left joins on `db_users`, ensuring every DB user has a row even if absent from Matomo. `avg_session_seconds` is consumed to produce `avg_session_minutes` and is not included in the output. Rows are sorted by `organisation_name` then `email`.
+**Notes:** All joins are left joins on `db_users`, ensuring every DB user has a row even if absent from Matomo. Visit duration rows are classified before joining: deliver visits over 20 minutes become real sessions, deliver visits at or below 20 minutes become short visits, and visits without deliver actions become prepare-only visits. Rows are sorted by `organisation_name` then `email`.
 
 ---
 
@@ -51,7 +53,9 @@ Two sentinel constants are used throughout:
 - `active_users_30` (int) — users with 2+ logins in the 30-day window
 - `logins_30_days` (int)
 - `logins_90_days` (int)
-- `avg_session_minutes` (float, 1 decimal) — mean across all users in the org
+- `avg_real_session_minutes` (float, 1 decimal) — mean of user-level real-session averages
+- `avg_prepare_minutes` (float, 1 decimal) — mean of user-level prepare-only averages
+- `short_visit_count` (int) — sum across users in the org
 - `sessions_delivered_30_days` (int)
 - `sessions_delivered_90_days` (int)
 - `last_login_date` (str) — most recent login across all users in the org; `"No tracked usage"` if none

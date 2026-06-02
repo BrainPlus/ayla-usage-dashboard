@@ -47,7 +47,7 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 3. **Last login per user** (slow, ~1–5 min) — one `Live.getLastVisitsDetails` call per user, sequentially. This is the bottleneck. A progress bar is shown. Not cached because caching would skip the progress callback.
 
-4. **Avg session duration** (fast, 1 API call, cached 1h) — a single `Live.getLastVisitsDetails` call; duration is extracted and averaged per user in pandas.
+4. **Visit durations** (fast, 1 API call, cached 1h) — a single `Live.getLastVisitsDetails` call; raw visit durations and deliver-action flags are extracted for classification in `merger.py`.
 
 5. **Merge** — `merger.py` left-joins all Matomo DataFrames onto the DB user list and aggregates up to org and global level.
 
@@ -58,7 +58,7 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 | Method | Used by | Why |
 |--------|---------|-----|
 | `UserId.getUsers` | `get_logins_by_date_range` | Fastest way to get visit counts per user ID; CSV format handles large result sets reliably |
-| `Live.getLastVisitsDetails` | `get_last_login_per_user`, `get_avg_visit_duration_by_user`, `get_sessions_delivered`, `get_activity_completions_per_user` | Only method that exposes raw visit and action detail including custom dimensions as `dimensionN` keys |
+| `Live.getLastVisitsDetails` | `get_last_login_per_user`, `get_visit_durations`, `get_sessions_delivered`, `get_activity_completions_per_user` | Only method that exposes raw visit and action detail including custom dimensions as `dimensionN` keys |
 | `VisitsSummary.get` | *(removed)* | Was used for avg duration but returned 0 for many users; replaced by bulk `Live.getLastVisitsDetails` |
 
 `Live.getLastVisitsDetails` is used for most calls because it returns the full visit object including `actionDetails`, which is where custom dimensions (`dimensionN`) are set per event. The other aggregate endpoints (`Events.getCategory`, `VisitsSummary.get`) do not expose per-action dimension values.
@@ -113,4 +113,4 @@ This filter is applied in:
 It is **not** applied in:
 - `get_logins_by_date_range` — login counts are visit-level, not action-level
 - `get_last_login_per_user` — last login date is visit-level
-- `get_avg_visit_duration_by_user` — visit duration is visit-level; both modes count as time spent in the app
+- `get_visit_durations` — visit duration is visit-level, but each visit is marked with whether it contains any deliver action so `merger.py` can classify real-session, prepare-only, and short-visit metrics

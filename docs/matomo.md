@@ -49,18 +49,19 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 ---
 
-### get_avg_visit_duration_by_user(date_range)
+### get_visit_durations(date_range)
 
-**Purpose:** Fetches average visit duration in seconds for each user via a single bulk API call.
+**Purpose:** Fetches one raw visit-duration row per Matomo visit via a single bulk API call.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)
-- `avg_session_seconds` (float) — mean of `visitDuration` across all visits for the user; 0.0 if no visits found
+- `visit_duration_seconds` (float) — raw `visitDuration` value from Matomo
+- `has_deliver_action` (bool) — `True` if any action in the visit has `dimension10 == "false"`
 
-**Notes:** Uses a single `Live.getLastVisitsDetails` call and computes the mean per user in pandas — much faster than the previous approach of one `VisitsSummary.get` call per user. Visits with no `userId` (anonymous/logged-out visits) are skipped. No dimension10 filter — visit duration is visit-level data unrelated to deliver vs. prepare mode.
+**Notes:** Uses a single `Live.getLastVisitsDetails` call. Visits with no `userId` (anonymous/logged-out visits) are skipped. Duration classification and averaging happen in `merger.py` so raw visit rows can be split into real-session, prepare-only, and short-visit metrics.
 
 ---
 
