@@ -43,11 +43,11 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 1. **DB queries** (fast, ~1–2s) — `database.py` runs five SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, star ratings by org, monthly star ratings.
 
-2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` makes four `Live.getLastVisitsDetails` calls: logins for 30-day window, logins for 90-day window, sessions delivered for both windows, and activity completions. One additional `UserId.getUsers` call fetches the login list.
+2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `app.py` fetches login counts with `UserId.getUsers` for the 30-day and 90-day windows, and fetches shared raw visit payloads with `Live.getLastVisitsDetails` for those windows. Session, activity, and duration DataFrames reuse those cached raw visits instead of making separate bulk visit calls.
 
 3. **Last login per user** (slow, ~1–5 min) — one `Live.getLastVisitsDetails` call per user, sequentially. This is the bottleneck. A progress bar is shown. Not cached because caching would skip the progress callback.
 
-4. **Visit durations** (fast, 1 API call, cached 1h) — a single `Live.getLastVisitsDetails` call; raw visit durations and deliver-action flags are extracted for classification in `merger.py`.
+4. **Visit durations** (fast, cached 1h) — raw visit durations and deliver-action flags are extracted from the shared cached raw visits fetched in Step 2 for classification in `merger.py`; this step typically does not make an additional Matomo API call.
 
 5. **Merge** — `merger.py` left-joins all Matomo DataFrames onto the DB user list and aggregates up to org and global level.
 

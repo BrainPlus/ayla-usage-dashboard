@@ -49,50 +49,53 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 ---
 
-### get_visit_durations(date_range)
+### get_visit_durations(date_range, raw_visits=None)
 
 **Purpose:** Fetches one raw visit-duration row per Matomo visit via a single bulk API call.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
+- `raw_visits` *(list, optional)* — existing `Live.getLastVisitsDetails` payload to reuse; when omitted, the function fetches visits for `date_range`.
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)
 - `visit_duration_seconds` (float) — raw `visitDuration` value from Matomo
 - `has_deliver_action` (bool) — `True` if any action in the visit has `dimension10 == "false"`
 
-**Notes:** Uses a single `Live.getLastVisitsDetails` call. Visits with no `userId` (anonymous/logged-out visits) are skipped. Duration classification and averaging happen in `merger.py` so raw visit rows can be split into real-session, prepare-only, and short-visit metrics.
+**Notes:** Uses a single `Live.getLastVisitsDetails` call unless `raw_visits` is provided by the caller. Visits with no `userId` (anonymous/logged-out visits) are skipped. Duration classification and averaging happen in `merger.py` so raw visit rows can be split into real-session, prepare-only, and short-visit metrics.
 
 ---
 
-### get_sessions_delivered(date_range)
+### get_sessions_delivered(date_range, raw_visits=None)
 
 **Purpose:** Fetches unique delivered session instances as `(bundle_id, session_id, user_id)` rows.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
+- `raw_visits` *(list, optional)* — existing `Live.getLastVisitsDetails` payload to reuse; when omitted, the function fetches visits for `date_range`.
 
 **Returns:** DataFrame with columns:
 - `bundle_id` (str) — DB integer bundle ID from dimension14 (`customBundleId`)
 - `session_id` (str) — UUID from dimension5
 - `user_id` (str)
 
-**Notes:** Uses `Live.getLastVisitsDetails` without a segment filter. The deliver-mode filter is applied in Python: only actions where `dimension10 == "false"` are included (dimension10 is the `editMode` flag; `"false"` means deliver/live mode, `"true"` means prepare/edit mode). The Matomo segment approach (`customDimension10==false`) was found to return 0 results because the Live API returns dimension values as bare `dimensionN` keys, not `customDimensionN`. Within each visit, `(bundle_id, session_id)` pairs are deduplicated to avoid double-counting multiple events from the same session.
+**Notes:** Uses `Live.getLastVisitsDetails` without a segment filter unless `raw_visits` is provided by the caller. The deliver-mode filter is applied in Python: only actions where `dimension10 == "false"` are included (dimension10 is the `editMode` flag; `"false"` means deliver/live mode, `"true"` means prepare/edit mode). The Matomo segment approach (`customDimension10==false`) was found to return 0 results because the Live API returns dimension values as bare `dimensionN` keys, not `customDimensionN`. Within each visit, `(bundle_id, session_id)` pairs are deduplicated to avoid double-counting multiple events from the same session.
 
 ---
 
-### get_activity_completions_per_user(date_range)
+### get_activity_completions_per_user(date_range, raw_visits=None)
 
 **Purpose:** Counts "Activity Complete" events per user in delivered sessions only.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
+- `raw_visits` *(list, optional)* — existing `Live.getLastVisitsDetails` payload to reuse; when omitted, the function fetches visits for `date_range`.
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)
 - `activities_completed` (int)
 
-**Notes:** Uses `Live.getLastVisitsDetails` without a segment filter. Three conditions must all be true for an action to be counted: `dimension10 == "false"` (deliver mode), `eventCategory == "Activity"`, and `eventAction == "Activity Complete"`. The dimension10 check is evaluated first to short-circuit quickly.
+**Notes:** Uses `Live.getLastVisitsDetails` without a segment filter unless `raw_visits` is provided by the caller. Three conditions must all be true for an action to be counted: `dimension10 == "false"` (deliver mode), `eventCategory == "Activity"`, and `eventAction == "Activity Complete"`. The dimension10 check is evaluated first to short-circuit quickly.
 
 ---
 

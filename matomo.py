@@ -142,9 +142,13 @@ def get_visit_durations(date_range: str, raw_visits: list | None = None) -> pd.D
     """
     columns = ["user_id", "visit_duration_seconds", "has_deliver_action"]
     data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=columns)
 
     records = []
     for visit in data:
+        if not isinstance(visit, dict):
+            continue
         user_id = visit.get("userId")
         if not user_id:
             continue
@@ -182,9 +186,14 @@ def get_sessions_delivered(date_range: str, raw_visits: list | None = None) -> p
         Deduplicate on (bundle_id, session_id, user_id) before counting.
     """
     data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
+    columns = ["bundle_id", "session_id", "user_id"]
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=columns)
 
     records = []
     for visit in data:
+        if not isinstance(visit, dict):
+            continue
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
@@ -196,7 +205,7 @@ def get_sessions_delivered(date_range: str, raw_visits: list | None = None) -> p
                 seen.add((b, s))
                 records.append({"bundle_id": b, "session_id": s, "user_id": user_id})
 
-    return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
+    return pd.DataFrame(records, columns=columns)
 
 
 def get_activity_completions_per_user(date_range: str, raw_visits: list | None = None) -> pd.DataFrame:
@@ -214,9 +223,14 @@ def get_activity_completions_per_user(date_range: str, raw_visits: list | None =
         DataFrame with columns: user_id (str), activities_completed (int)
     """
     data = raw_visits if raw_visits is not None else _get_raw_visits(date_range)
+    columns = ["user_id", "activities_completed"]
+    if not isinstance(data, list):
+        return pd.DataFrame(columns=columns)
 
     counts: dict[str, int] = {}
     for visit in data:
+        if not isinstance(visit, dict):
+            continue
         user_id = str(visit.get("userId", ""))
         for action in visit.get("actionDetails", []):
             if (
@@ -230,7 +244,7 @@ def get_activity_completions_per_user(date_range: str, raw_visits: list | None =
     records = [
         {"user_id": uid, "activities_completed": cnt} for uid, cnt in counts.items()
     ]
-    return pd.DataFrame(records, columns=["user_id", "activities_completed"])
+    return pd.DataFrame(records, columns=columns)
 
 
 # --- helpers ---
