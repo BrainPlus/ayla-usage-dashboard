@@ -65,7 +65,7 @@ def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
 
 
 def get_last_login_per_user(
-    user_ids: list[str], progress_callback=None
+    user_ids: list[str], progress_callback=None, max_workers: int = 10
 ) -> pd.DataFrame:
     """
     Fetches the most recent login date for each user.
@@ -76,17 +76,16 @@ def get_last_login_per_user(
     Args:
         user_ids: list of user ID strings
         progress_callback: optional callable(current: int, total: int)
+        max_workers: number of concurrent Matomo requests
 
     Returns:
         DataFrame with columns: user_id (str), last_login_date (str "YYYY-MM-DD")
     """
-    records = []
+    import concurrent.futures
+
     total = len(user_ids)
 
-    for i, user_id in enumerate(user_ids):
-        if progress_callback:
-            progress_callback(i, total)
-
+    def fetch_last_login(user_id: str) -> dict:
         data = matomo_get(
             {
                 "method": "Live.getLastVisitsDetails",
@@ -98,17 +97,27 @@ def get_last_login_per_user(
                 "filter_limit": 1,
             }
         )
-
         last_login_date = ""
         if isinstance(data, list) and data:
             visit = data[0]
             raw = visit.get("lastActionDateTime") or visit.get("serverDate", "")
             last_login_date = raw[:10] if raw else ""
+        return {"user_id": str(user_id), "last_login_date": last_login_date}
 
-        records.append({"user_id": str(user_id), "last_login_date": last_login_date})
+    if total == 0:
+        if progress_callback:
+            progress_callback(0, 0)
+        return pd.DataFrame([], columns=["user_id", "last_login_date"])
 
-    if progress_callback:
-        progress_callback(total, total)
+    records = [None] * total
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_last_login, uid): i for i, uid in enumerate(user_ids)}
+        for future in concurrent.futures.as_completed(futures):
+            records[futures[future]] = future.result()
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total)
 
     return pd.DataFrame(records, columns=["user_id", "last_login_date"])
 
