@@ -9,7 +9,7 @@ class GetSessionsDeliveredTests(unittest.TestCase):
         visits = [
             {
                 "userId": "short-user",
-                "visitDuration": 20 * 60,
+                "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS,
                 "actionDetails": [
                     {
                         "dimension10": "false",
@@ -20,7 +20,7 @@ class GetSessionsDeliveredTests(unittest.TestCase):
             },
             {
                 "userId": "real-user",
-                "visitDuration": (20 * 60) + 1,
+                "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS + 1,
                 "actionDetails": [
                     {
                         "dimension10": "false",

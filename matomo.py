@@ -7,28 +7,26 @@ import pandas as pd
 import requests
 import streamlit as st
 
-MATOMO_URL = st.secrets["matomo_url"]
-TOKEN = st.secrets["matomo_token"]
-SITE_ID = st.secrets["matomo_site_id"]
 
-_BASE_PARAMS = {
-    "module": "API",
-    "idSite": SITE_ID,
-    "token_auth": TOKEN,
-}
+def _base_params() -> dict:
+    return {
+        "module": "API",
+        "idSite": st.secrets["matomo_site_id"],
+        "token_auth": st.secrets["matomo_token"],
+    }
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
 
 
 def matomo_get(params: dict, expect_csv: bool = False):
     """Make a Matomo API GET request, merging base params. Returns parsed JSON or raw CSV text."""
-    merged = {**_BASE_PARAMS, **params}
+    merged = {**_base_params(), **params}
     if expect_csv:
         merged["format"] = "CSV"
     else:
         merged.setdefault("format", "JSON")
 
-    response = requests.get(MATOMO_URL, params=merged, timeout=60)
+    response = requests.get(st.secrets["matomo_url"], params=merged, timeout=60)
     response.raise_for_status()
 
     if expect_csv:

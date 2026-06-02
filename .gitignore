@@ -1,5 +1,6 @@
 venv/
 .streamlit/secrets.toml
+.claude/settings.local.json
 __pycache__/
 *.pyc
 .history/
