@@ -15,7 +15,18 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
         ("Source of organisation mapping", "PostgreSQL database"),
         ("Logins", "Number of Matomo visits per user/organisation"),
         ("Active users", "Users with 2 or more logins in the 30-day window"),
-        ("Avg session time", "Average visit duration in minutes from Matomo"),
+        (
+            "Avg real session time",
+            "Average duration in minutes for deliver visits longer than 20 minutes",
+        ),
+        (
+            "Avg prepare time",
+            "Average duration in minutes for prepare-only visits",
+        ),
+        (
+            "Short visits",
+            "Count of deliver visits lasting 20 minutes or less",
+        ),
         (
             "Sessions delivered",
             "Unique (bundleId + sessionId) pairs from delivered sessions only (editMode=false)",
