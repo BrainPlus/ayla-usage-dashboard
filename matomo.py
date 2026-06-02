@@ -109,9 +109,13 @@ def get_last_login_per_user(
             progress_callback(0, 0)
         return pd.DataFrame([], columns=["user_id", "last_login_date"])
 
+    worker_count = max(1, min(max_workers, total))
+    if progress_callback:
+        progress_callback(0, total)
+
     records = [None] * total
     completed = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {executor.submit(fetch_last_login, uid): i for i, uid in enumerate(user_ids)}
         for future in concurrent.futures.as_completed(futures):
             records[futures[future]] = future.result()
