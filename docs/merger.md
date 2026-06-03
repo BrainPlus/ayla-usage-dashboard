@@ -1,6 +1,6 @@
 # merger.py — DataFrame Merge and Aggregation Functions
 
-This module combines DataFrames from `database.py` and `matomo.py` into the final display-ready DataFrames used by the UI. It makes no database or Matomo API calls — all inputs are DataFrames.
+This module combines DataFrames from `database.py`, `matomo.py`, and `squidex.py` into the final display-ready DataFrames used by the UI. It makes no database, Matomo, or Squidex API calls — all inputs are DataFrames or dicts.
 
 Two sentinel constants are used throughout:
 - `_NO_USAGE = "No tracked usage"` — placeholder for users/orgs with no Matomo activity
@@ -8,7 +8,7 @@ Two sentinel constants are used throughout:
 
 ---
 
-### build_user_detail(db_users, logins_30, logins_90, last_login, avg_duration, activity_completions)
+### build_user_detail(db_users, logins_30, logins_90, last_login, visit_durations, activity_completions)
 
 **Purpose:** Builds the per-user detail table by left-joining all Matomo metrics onto the canonical DB user list.
 
@@ -17,7 +17,7 @@ Two sentinel constants are used throughout:
 - `logins_30` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 30-day window
 - `logins_90` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 90-day window
 - `last_login` *(DataFrame)* — `user_id`, `last_login_date` from `matomo.get_last_login_per_user`
-- `avg_duration` *(DataFrame)* — `user_id`, `avg_session_seconds` from `matomo.get_avg_visit_duration_by_user`
+- `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations`
 - `activity_completions` *(DataFrame)* — `user_id`, `activities_completed` from `matomo.get_activity_completions_per_user`
 
 **Returns:** DataFrame with columns:
@@ -27,16 +27,18 @@ Two sentinel constants are used throughout:
 - `last_login_date` (str) — `"No tracked usage"` if never seen in Matomo
 - `logins_30_days` (int) — 0 if not in Matomo
 - `logins_90_days` (int) — 0 if not in Matomo
-- `avg_session_minutes` (float, 1 decimal) — derived from `avg_session_seconds / 60`
+- `avg_real_session_minutes` (float, 1 decimal) — mean duration of deliver visits >20 min
+- `median_prepare_minutes` (float, 1 decimal) — median duration of prepare-only visits
+- `short_visit_count` (int) — deliver visits ≤20 min
 - `activities_completed` (int) — 0 if not in Matomo
 
-**Notes:** All joins are left joins on `db_users`, ensuring every DB user has a row even if absent from Matomo. `avg_session_seconds` is consumed to produce `avg_session_minutes` and is not included in the output. Rows are sorted by `organisation_name` then `email`.
+**Notes:** Duration metrics are computed by `_build_visit_duration_metrics`. All joins are left joins on `db_users`, ensuring every DB user has a row even if absent from Matomo. Rows are sorted by `organisation_name` then `email`.
 
 ---
 
-### build_org_summary(user_detail, sessions_delivered_30, sessions_delivered_90, star_ratings, org_user_counts)
+### build_org_summary(user_detail, sessions_delivered_30, sessions_delivered_90, star_ratings, org_user_counts, visit_durations)
 
-**Purpose:** Builds the per-organisation summary table by aggregating user_detail and joining session, rating, and user-count data.
+**Purpose:** Builds the per-organisation summary table by aggregating user_detail and joining session, rating, user-count, and raw visit data.
 
 **Parameters:**
 - `user_detail` *(DataFrame)* — output of `build_user_detail`
@@ -44,6 +46,7 @@ Two sentinel constants are used throughout:
 - `sessions_delivered_90` *(DataFrame)* — same structure for the 90-day window
 - `star_ratings` *(DataFrame)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
 - `org_user_counts` *(DataFrame)* — `organisation_name`, `user_count` from `database.get_org_user_counts`
+- `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations` (raw, not pre-aggregated)
 
 **Returns:** DataFrame with columns:
 - `organisation_name` (str)
@@ -51,18 +54,42 @@ Two sentinel constants are used throughout:
 - `active_users_30` (int) — users with 2+ logins in the 30-day window
 - `logins_30_days` (int)
 - `logins_90_days` (int)
-- `avg_session_minutes` (float, 1 decimal) — mean across all users in the org
+- `avg_real_session_minutes` (float, 1 decimal) — mean of per-user averages, excluding users with 0
+- `median_prepare_minutes` (float, 1 decimal) — median of per-user medians, excluding users with 0
+- `min_real_session_minutes` (float, 1 decimal) — shortest individual real session (raw visit >20 min) across all users in the org
+- `max_real_session_minutes` (float, 1 decimal) — longest individual real session across all users in the org
+- `short_visit_count` (int)
 - `sessions_delivered_30_days` (int)
 - `sessions_delivered_90_days` (int)
-- `last_login_date` (str) — most recent login across all users in the org; `"No tracked usage"` if none
+- `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `sessions_delivered_30_days`; 0.0 if no sessions
+- `last_login_date` (str) — most recent login across all users; `"No tracked usage"` if none
 - `groups_avg_rating` (float, 2 decimal) — 0.0 if no data
 - `therapists_avg_rating` (float, 2 decimal) — 0.0 if no data
 
 **Notes:**
-- **Last login aggregation:** rows with `"No tracked usage"` are excluded before taking `max()` so a real date always takes precedence. Orgs with no real logins get the sentinel back via `fillna`.
-- **Sessions delivered:** the `sessions_delivered_*` DataFrames are joined to `user_detail` to resolve `organisation_name`, then deduplicated on `(organisation_name, bundle_id, session_id)` — so a session delivered by two different users within the same org is counted once, not twice.
-- **Star ratings:** pivoted from long format (`target` as column values) to wide format (`groups_avg_rating` and `therapists_avg_rating` as columns). Both columns are guaranteed to exist even if one target type has no data.
-- **Sort order:** alphabetical by `organisation_name`; `"Unassigned / No organisation"` is always last.
+- **Min/max session time:** computed from raw `visit_durations` (not per-user averages) to preserve individual outliers. Joined to org via `user_detail[user_id → organisation_name]`. See ADR-0004.
+- **Median prepare time:** median is used (not mean) because prepare visits are skewed by occasional long sessions. See ADR-0003.
+- **Sessions delivered:** deduplicated on `(organisation_name, bundle_id, session_id)` — a session delivered by two users in the same org counts once.
+- **Star ratings:** pivoted from long to wide; both columns guaranteed to exist even if one target has no data.
+- **Sort order:** alphabetical; `"Unassigned / No organisation"` always last.
+
+---
+
+### build_activity_usage_table(activity_usage, activity_catalogue)
+
+**Purpose:** Joins raw activity usage counts with human-readable titles from the Squidex catalogue.
+
+**Parameters:**
+- `activity_usage` *(DataFrame)* — `activity_id` (str), `completion_count` (int) from `matomo.get_activity_usage_by_id`
+- `activity_catalogue` *(dict)* — `{squidex_id: title}` from `squidex.get_activity_catalogue`; may be empty if Squidex is unavailable
+
+**Returns:** DataFrame with columns:
+- `Activity Name` (str) — human-readable title; falls back to raw `activity_id` if not in catalogue
+- `completion_count` (int)
+
+Sorted descending by `completion_count` (most used first).
+
+**Notes:** Unknown IDs (not in catalogue) use the raw ID string as fallback — the table always renders even if the Squidex fetch failed. Activity IDs are locale-specific Squidex content IDs; the same conceptual activity in different languages carries a different ID and title. See ADR-0002.
 
 ---
 
@@ -80,7 +107,7 @@ Two sentinel constants are used throughout:
 - `total_groups_created` (int) — sum from `bundle_counts`
 - `total_sessions_delivered_30` (int)
 - `total_sessions_delivered_90` (int)
-- `overall_groups_avg_rating` (float, 2 decimal) — mean across orgs that have a non-zero rating
+- `overall_groups_avg_rating` (float, 2 decimal) — mean across orgs with a non-zero rating
 - `overall_therapists_avg_rating` (float, 2 decimal) — same
 
-**Notes:** `"Unassigned / No organisation"` is excluded from `total_organisations` (not a real org) but included in all other totals. Rating averages exclude orgs with a 0.0 rating to avoid depressing the mean with no-data entries — only orgs that have received at least one rating contribute.
+**Notes:** Rating averages exclude orgs with a 0.0 rating to avoid depressing the mean with no-data entries.
