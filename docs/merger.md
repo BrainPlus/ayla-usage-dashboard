@@ -85,11 +85,29 @@ Two sentinel constants are used throughout:
 
 **Returns:** DataFrame with columns:
 - `Activity Name` (str) — human-readable title; falls back to raw `activity_id` if not in catalogue
-- `completion_count` (int)
+- `Completions` (int)
 
-Sorted descending by `completion_count` (most used first).
+Sorted descending by `Completions` (most used first).
 
 **Notes:** Unknown IDs (not in catalogue) use the raw ID string as fallback — the table always renders even if the Squidex fetch failed. Activity IDs are locale-specific Squidex content IDs; the same conceptual activity in different languages carries a different ID and title. See ADR-0002.
+
+---
+
+### activity_catalogue_match_stats(activity_usage, activity_catalogue)
+
+**Purpose:** Computes diagnostic counts for how well the Matomo activity IDs match the loaded Squidex catalogue.
+
+**Parameters:**
+- `activity_usage` *(DataFrame)* — `activity_id` (str), `completion_count` (int) from `matomo.get_activity_usage_by_id`
+- `activity_catalogue` *(dict)* — `{squidex_id: title}` from `squidex.get_activity_catalogue`
+
+**Returns:** `dict` with keys:
+- `usage_ids` (int) — unique Matomo activity IDs in the usage data
+- `catalogue_ids` (int) — unique Squidex IDs loaded into the catalogue
+- `matched_ids` (int) — IDs present in both sources
+- `unmatched_ids` (int) — Matomo IDs not found in the catalogue
+
+**Notes:** `app.py` uses these counts to show a warning when activity titles cannot be resolved, distinguishing an empty catalogue from a project/schema mismatch or partial catalogue.
 
 ---
 

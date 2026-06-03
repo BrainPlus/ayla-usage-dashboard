@@ -95,7 +95,7 @@ matomo_site_id = "4"
 
 # Squidex — optional, used to resolve activity IDs to titles
 squidex_base_url = "https://cloud.squidex.io/"
-squidex_project = "your_project"
+squidex_project = "cst-prepare"  # project containing the session activity schemas
 squidex_client_id = "your_client_id"
 squidex_client_secret = "your_client_secret"
 
