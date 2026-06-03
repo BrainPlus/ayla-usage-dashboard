@@ -211,11 +211,9 @@ def build_org_summary(
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
 
-    agg["avg_activities_per_session"] = agg.apply(
-        lambda r: round(r["total_activities_completed"] / r["sessions_delivered_30_days"], 1)
-        if r["sessions_delivered_30_days"] > 0
-        else 0.0,
-        axis=1,
+    denom = agg["sessions_delivered_30_days"].replace(0, pd.NA)
+    agg["avg_activities_per_session"] = (
+        (agg["total_activities_completed"] / denom).fillna(0.0).round(1)
     )
     agg = agg.drop(columns=["total_activities_completed"])
 

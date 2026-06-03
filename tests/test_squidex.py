@@ -61,6 +61,7 @@ def test_get_access_token_returns_token() -> None:
             "client_secret": "my-secret",
             "scope": "squidex-api",
         },
+        timeout=60,
     )
 
 

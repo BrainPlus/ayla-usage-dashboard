@@ -52,6 +52,7 @@ def get_access_token(base_url: str, client_id: str, client_secret: str) -> str:
             "client_secret": client_secret,
             "scope": "squidex-api",
         },
+        timeout=60,
     )
     response.raise_for_status()
     return response.json()["access_token"]
@@ -82,7 +83,7 @@ def get_activity_catalogue(base_url: str, project: str, token: str) -> dict[str,
                     }}
                 }}
                 """
-                response = requests.post(url, json={"query": query}, headers=headers)
+                response = requests.post(url, json={"query": query}, headers=headers, timeout=60)
                 response.raise_for_status()
                 payload = response.json()
                 if payload.get("errors"):
