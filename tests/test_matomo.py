@@ -59,3 +59,41 @@ def test_get_sessions_delivered_returns_empty_frame_for_non_list_response(monkey
 
     assert result.empty
     assert list(result.columns) == ["bundle_id", "session_id", "user_id"]
+
+
+def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
+    """Counts Activity Complete events in deliver mode; skips prepare-mode actions."""
+    visits = [
+        {
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Complete",
+                    "dimension10": "false",
+                    "dimension6": "act-123",
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Complete",
+                    "dimension10": "true",  # prepare mode — must be excluded
+                    "dimension6": "act-456",
+                },
+            ]
+        }
+    ]
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
+    result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
+    assert len(result) == 1
+    assert result.iloc[0]["activity_id"] == "act-123"
+    assert result.iloc[0]["completion_count"] == 1
+
+
+def test_get_activity_usage_by_id_non_list_returns_empty(monkeypatch) -> None:
+    """Non-list response returns empty DataFrame with correct columns."""
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: {"error": "oops"})
+    result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
+    assert result.empty
+    assert "activity_id" in result.columns
+    assert "completion_count" in result.columns

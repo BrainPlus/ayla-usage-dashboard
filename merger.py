@@ -363,3 +363,33 @@ def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame)
         "overall_groups_avg_rating": round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0,
         "overall_therapists_avg_rating": round(float(therapists_rated.mean()), 2) if not therapists_rated.empty else 0.0,
     }
+
+
+def build_activity_usage_table(
+    activity_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Join activity usage counts with catalogue titles.
+
+    Unknown IDs (not in catalogue) use the raw ID string as fallback.
+    Returns a DataFrame sorted by Completions descending.
+
+    Args:
+        activity_usage:    DataFrame with columns: activity_id (str), completion_count (int)
+        activity_catalogue: dict mapping activity_id → title from Squidex
+
+    Returns:
+        DataFrame with columns: Activity Name (str), Completions (int)
+    """
+    if activity_usage.empty:
+        return pd.DataFrame(columns=["Activity Name", "Completions"])
+
+    df = activity_usage.copy()
+    df["Activity Name"] = df["activity_id"].map(activity_catalogue).fillna(df["activity_id"])
+    df = df.rename(columns={"completion_count": "Completions"})
+    return (
+        df[["Activity Name", "Completions"]]
+        .sort_values("Completions", ascending=False)
+        .reset_index(drop=True)
+    )

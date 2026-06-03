@@ -438,6 +438,40 @@ def test_avg_activities_per_session_basic() -> None:
     assert row["avg_activities_per_session"] == 5.0  # 15 / 3 = 5.0
 
 
+def test_build_activity_usage_table_known_ids() -> None:
+    """Known IDs get mapped to catalogue titles, sorted descending by completions."""
+    usage = pd.DataFrame({"activity_id": ["abc", "def"], "completion_count": [5, 10]})
+    catalogue = {"abc": "Reality Orientation", "def": "Warm Up"}
+    result = merger.build_activity_usage_table(usage, catalogue)
+    assert list(result["Activity Name"]) == ["Warm Up", "Reality Orientation"]
+    assert list(result["Completions"]) == [10, 5]
+
+
+def test_build_activity_usage_table_unknown_id_fallback() -> None:
+    """Unknown IDs fall back to raw ID string."""
+    usage = pd.DataFrame({"activity_id": ["unknown-xyz"], "completion_count": [3]})
+    result = merger.build_activity_usage_table(usage, {})
+    assert result.iloc[0]["Activity Name"] == "unknown-xyz"
+    assert result.iloc[0]["Completions"] == 3
+
+
+def test_build_activity_usage_table_empty_catalogue() -> None:
+    """Empty catalogue returns raw IDs, no crash."""
+    usage = pd.DataFrame({"activity_id": ["a1", "b2"], "completion_count": [7, 2]})
+    result = merger.build_activity_usage_table(usage, {})
+    assert list(result["Activity Name"]) == ["a1", "b2"]
+    assert list(result["Completions"]) == [7, 2]
+
+
+def test_build_activity_usage_table_empty_usage() -> None:
+    """Empty usage DataFrame returns empty result with correct columns."""
+    empty = pd.DataFrame(columns=["activity_id", "completion_count"])
+    result = merger.build_activity_usage_table(empty, {"x": "Foo"})
+    assert result.empty
+    assert "Activity Name" in result.columns
+    assert "Completions" in result.columns
+
+
 def test_avg_activities_per_session_zero_sessions_delivered() -> None:
     """When sessions_delivered_30_days == 0, result must be 0.0 (not NaN or error)."""
     db_users = pd.DataFrame([

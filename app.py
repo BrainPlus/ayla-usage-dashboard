@@ -3,6 +3,8 @@
 import streamlit as st
 from datetime import date, timedelta
 
+import pandas as pd
+
 import database
 import matomo
 import merger
@@ -49,6 +51,11 @@ def _cached_activity_catalogue() -> dict:
         return squidex.get_activity_catalogue(base_url, project, token)
     except Exception:
         return {}
+
+
+@st.cache_data(ttl=3600)
+def _cached_activity_usage(date_range: str):
+    return matomo.get_activity_usage_by_id(date_range)
 
 
 @st.cache_data(ttl=3600)
@@ -100,6 +107,7 @@ if pull:
             sessions_90 = _cached_sessions_delivered(date_range_90)
             activity_completions = _cached_activity_completions(date_range_30)
             activity_catalogue = _cached_activity_catalogue()
+            activity_usage = _cached_activity_usage(date_range_30)
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = sorted(
@@ -144,6 +152,7 @@ if pull:
             "monthly_ratings": monthly_ratings,
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
+            "activity_usage": activity_usage,
             "region": region,
             "date_range_30": date_range_30,
             "date_range_90": date_range_90,
@@ -212,6 +221,26 @@ else:
             st.line_chart(monthly_pivot)
         else:
             st.info("No monthly rating data available.")
+
+        st.divider()
+        st.subheader("Activity Usage (last 30 days)")
+        if "activity_usage" in st.session_state:
+            _activity_usage_table = merger.build_activity_usage_table(
+                st.session_state["activity_usage"],
+                st.session_state.get("activity_catalogue", {}),
+            )
+            st.dataframe(
+                _activity_usage_table,
+                use_container_width=True,
+                column_config=_column_config_for(
+                    _activity_usage_table,
+                    {
+                        "Activity Name": st.column_config.TextColumn("Activity Name"),
+                        "Completions": st.column_config.NumberColumn("Completions", format="%d"),
+                    },
+                ),
+                hide_index=True,
+            )
 
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
@@ -372,6 +401,10 @@ if "user_detail" in st.session_state:
         st.session_state["region"],
         st.session_state["date_range_30"],
         st.session_state["date_range_90"],
+        activity_usage_table=merger.build_activity_usage_table(
+            st.session_state.get("activity_usage", pd.DataFrame()),
+            st.session_state.get("activity_catalogue", {}),
+        ),
     )
     st.download_button(
         label="Download Excel Report",
