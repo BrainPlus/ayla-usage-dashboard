@@ -46,3 +46,7 @@ _Avoid_: Full session, delivered visit
 **Short Visit**:
 A deliver visit with a duration of 20 minutes or under. Treated as prep or browsing behaviour, not a genuine session delivery.
 _Avoid_: Partial session, brief session
+
+**Activity**:
+A discrete content unit within a CST Session, belonging to one of five slots: intro, warmup, reality orientation (RO), main, or outro. Each activity has a unique ID in Squidex (the CMS) that is locale-specific — the same conceptual activity in different languages carries a different Squidex ID. Tracked in Matomo as `dimension6` (activityId). An activity is considered completed when a therapist navigates forward past it (firing an `Activity Complete` event); this is a known limitation — rapid forward navigation also triggers the event.
+_Avoid_: Step (a sub-unit within an activity), exercise
