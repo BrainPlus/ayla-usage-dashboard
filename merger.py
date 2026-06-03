@@ -121,8 +121,8 @@ def build_org_summary(
     agg = user_detail.groupby("organisation_name").agg(
         logins_30_days=("logins_30_days", "sum"),
         logins_90_days=("logins_90_days", "sum"),
-        avg_real_session_minutes=("avg_real_session_minutes", "mean"),
-        avg_prepare_minutes=("avg_prepare_minutes", "mean"),
+        avg_real_session_minutes=("avg_real_session_minutes", lambda s: s[s > 0].mean()),
+        avg_prepare_minutes=("avg_prepare_minutes", lambda s: s[s > 0].mean()),
         short_visit_count=("short_visit_count", "sum"),
         active_users_30=("logins_30_days", lambda s: (s >= 2).sum()),
     ).reset_index()
