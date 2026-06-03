@@ -118,6 +118,7 @@ if pull:
             )
             org_summary = merger.build_org_summary(
                 user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
+                visit_durations=visit_durations,
             )
             global_summary = merger.build_global_summary(org_summary, bundle_counts)
 
@@ -228,6 +229,14 @@ else:
                     help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
                     format="%.1f",
                 ),
+                "min_real_session_minutes": st.column_config.NumberColumn(
+                    help="Shortest individual real session (deliver visit >20 min) for any user in this organisation",
+                    format="%.1f",
+                ),
+                "max_real_session_minutes": st.column_config.NumberColumn(
+                    help="Longest individual real session (deliver visit >20 min) for any user in this organisation",
+                    format="%.1f",
+                ),
                 "short_visit_count": st.column_config.NumberColumn(
                     help=(
                         "Count of deliver-mode visits 20 minutes or under — treated as check-ins "
@@ -304,6 +313,14 @@ else:
                 ),
                 "median_prepare_minutes": st.column_config.NumberColumn(
                     help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                    format="%.1f",
+                ),
+                "min_real_session_minutes": st.column_config.NumberColumn(
+                    help="Shortest individual real session (deliver visit >20 min) for any user in this organisation",
+                    format="%.1f",
+                ),
+                "max_real_session_minutes": st.column_config.NumberColumn(
+                    help="Longest individual real session (deliver visit >20 min) for any user in this organisation",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(

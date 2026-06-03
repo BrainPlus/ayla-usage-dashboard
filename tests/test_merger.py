@@ -146,6 +146,7 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
             _empty(["bundle_id", "session_id", "user_id"]),
             _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
             pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+            visit_durations=_visit_durations([]),
         )
 
     row = org_summary.iloc[0]
@@ -239,6 +240,7 @@ def test_org_summary_sums_short_visits_and_uses_median_of_user_medians() -> None
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
     )
 
     row = org_summary.iloc[0]
@@ -292,9 +294,109 @@ def test_org_summary_two_level_median() -> None:
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
     )
 
     row = org_summary.iloc[0]
     # median of user medians: median([10.0, 25.0]) = 17.5
     assert row["median_prepare_minutes"] == 17.5
 
+def _base_org_setup_for_minmax(visit_rows):
+    """Helper: single-org (Org A) with u1 and u2, returns (user_detail, visit_durations_df)."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations(visit_rows)
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    return user_detail, vd
+
+
+def _org_summary_with_vd(user_detail, vd, user_count=2):
+    return merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": user_count}]),
+        visit_durations=vd,
+    )
+
+
+def test_org_min_max_basic() -> None:
+    """Two users with different session lengths: min/max from raw visits."""
+    user_detail, vd = _base_org_setup_for_minmax([
+        {"user_id": "u1", "visit_duration_seconds": 30 * 60, "has_deliver_action": True},
+        {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": True},
+        {"user_id": "u2", "visit_duration_seconds": 45 * 60, "has_deliver_action": True},
+    ])
+    row = _org_summary_with_vd(user_detail, vd).iloc[0]
+    assert row["min_real_session_minutes"] == 30.0
+    assert row["max_real_session_minutes"] == 60.0
+
+
+def test_org_min_max_single_session() -> None:
+    """Org has only one real session: min == max."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 25 * 60, "has_deliver_action": True},
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 25.0
+    assert row["max_real_session_minutes"] == 25.0
+
+
+def test_org_min_max_excludes_short_visits() -> None:
+    """Short deliver visits (<= 20 min) must NOT affect min_real_session_minutes."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": True},  # short
+        {"user_id": "u1", "visit_duration_seconds": 40 * 60, "has_deliver_action": True},  # real
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 40.0  # short visit excluded
+    assert row["max_real_session_minutes"] == 40.0
+
+
+def test_org_min_max_no_real_sessions() -> None:
+    """When no real sessions exist, both min and max should be 0.0."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": True},  # short only
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 0.0
+    assert row["max_real_session_minutes"] == 0.0

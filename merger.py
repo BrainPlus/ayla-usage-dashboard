@@ -87,6 +87,7 @@ def build_org_summary(
     sessions_delivered_90: pd.DataFrame,
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
+    visit_durations: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -100,13 +101,15 @@ def build_org_summary(
         sessions_delivered_90:  bundle_id, session_id, user_id  (90-day window)
         star_ratings:           organisation_name, target, avg_rating, total_responses
         org_user_counts:        organisation_name, user_count
+        visit_durations:        user_id, visit_duration_seconds, has_deliver_action
+                                (raw visits — used for org-level min/max real session time)
 
     Returns:
         DataFrame with columns:
             organisation_name, total_users, active_users_30,
             logins_30_days, logins_90_days, avg_real_session_minutes,
-            median_prepare_minutes, short_visit_count,
-            sessions_delivered_30_days, sessions_delivered_90_days,
+            median_prepare_minutes, min_real_session_minutes, max_real_session_minutes,
+            short_visit_count, sessions_delivered_30_days, sessions_delivered_90_days,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
     # --- aggregate user_detail by org ---
@@ -199,6 +202,35 @@ def build_org_summary(
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
 
+    # --- org-level min/max real session duration from raw visits ---
+    if visit_durations is not None and not visit_durations.empty:
+        vd = visit_durations.copy()
+        vd["user_id"] = vd["user_id"].astype(str)
+        vd["visit_duration_seconds"] = pd.to_numeric(vd["visit_duration_seconds"], errors="coerce").fillna(0.0)
+        vd["has_deliver_action"] = vd["has_deliver_action"].fillna(False).astype(bool)
+        real_vd = vd[vd["has_deliver_action"] & (vd["visit_duration_seconds"] > _REAL_SESSION_MIN_SECONDS)]
+        if not real_vd.empty:
+            real_vd = real_vd.merge(
+                user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+                on="user_id", how="left",
+            )
+            minmax = (
+                real_vd.groupby("organisation_name")["visit_duration_seconds"]
+                .agg(min_real_session_minutes="min", max_real_session_minutes="max")
+                .reset_index()
+            )
+            minmax["min_real_session_minutes"] = (minmax["min_real_session_minutes"] / 60).round(1)
+            minmax["max_real_session_minutes"] = (minmax["max_real_session_minutes"] / 60).round(1)
+            agg = agg.merge(minmax, on="organisation_name", how="left")
+        else:
+            agg["min_real_session_minutes"] = 0.0
+            agg["max_real_session_minutes"] = 0.0
+    else:
+        agg["min_real_session_minutes"] = 0.0
+        agg["max_real_session_minutes"] = 0.0
+    agg["min_real_session_minutes"] = agg["min_real_session_minutes"].fillna(0.0)
+    agg["max_real_session_minutes"] = agg["max_real_session_minutes"].fillna(0.0)
+
     # --- sort: alphabetical, "Unassigned / No organisation" last ---
     is_unassigned = agg["organisation_name"] == _NO_ORG
     agg = pd.concat([
@@ -214,6 +246,8 @@ def build_org_summary(
         "logins_90_days",
         "avg_real_session_minutes",
         "median_prepare_minutes",
+        "min_real_session_minutes",
+        "max_real_session_minutes",
         "short_visit_count",
         "sessions_delivered_30_days",
         "sessions_delivered_90_days",

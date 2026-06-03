@@ -20,6 +20,14 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
             "Average duration in minutes for deliver visits longer than 20 minutes",
         ),
         (
+            "Min real session time",
+            "Shortest individual deliver visit over 20 minutes (minutes) for any user in the organisation",
+        ),
+        (
+            "Max real session time",
+            "Longest individual deliver visit over 20 minutes (minutes) for any user in the organisation",
+        ),
+        (
             "Avg prepare time",
             "Average duration in minutes for prepare-only visits",
         ),
