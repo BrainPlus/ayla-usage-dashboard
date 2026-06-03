@@ -10,7 +10,7 @@ sys.modules.setdefault("streamlit", streamlit_stub)
 import matomo
 
 
-def test_get_sessions_delivered_only_counts_real_deliver_visits(monkeypatch) -> None:
+def test_get_sessions_delivered_counts_all_deliver_visits_regardless_of_duration(monkeypatch) -> None:
     def fake_matomo_get(params: dict) -> list[dict]:
         return [
             {
@@ -43,7 +43,10 @@ def test_get_sessions_delivered_only_counts_real_deliver_visits(monkeypatch) -> 
     result = matomo.get_sessions_delivered("2026-01-01,2026-01-31")
 
     expected = pd.DataFrame(
-        [{"bundle_id": "b1", "session_id": "s1", "user_id": "u1"}],
+        [
+            {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+            {"bundle_id": "b3", "session_id": "s3", "user_id": "u2"},
+        ],
         columns=["bundle_id", "session_id", "user_id"],
     )
     pd.testing.assert_frame_equal(result, expected)

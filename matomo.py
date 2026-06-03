@@ -196,9 +196,6 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
 
     records = []
     for visit in data:
-        visit_duration_seconds = float(visit.get("visitDuration") or 0)
-        if visit_duration_seconds <= REAL_SESSION_MIN_DURATION_SECONDS:
-            continue
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
