@@ -30,8 +30,8 @@ def _cached_activity_completions(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_avg_duration(date_range: str):
-    return matomo.get_avg_visit_duration_by_user(date_range)
+def _cached_visit_durations(date_range: str):
+    return matomo.get_visit_durations(date_range)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -99,14 +99,14 @@ if pull:
                 expanded=False,
             )
 
-        # Step 4 — Avg session duration (cached, loops per user internally)
+        # Step 4 — Visit durations
         with st.spinner("Fetching session durations..."):
-            avg_duration = _cached_avg_duration(date_range_30)
+            visit_durations = _cached_visit_durations(date_range_30)
 
         # Step 5 — Build merged DataFrames
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
-                db_users, logins_30, logins_90, last_login, avg_duration, activity_completions,
+                db_users, logins_30, logins_90, last_login, visit_durations, activity_completions,
             )
             org_summary = merger.build_org_summary(
                 user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
@@ -194,9 +194,10 @@ else:
         st.dataframe(
             org_summary.style.format(
                 {
-                    "avg_session_minutes":   "{:.1f}",
-                    "groups_avg_rating":     "{:.2f}",
-                    "therapists_avg_rating": "{:.2f}",
+                    "avg_real_session_minutes": "{:.1f}",
+                    "avg_prepare_minutes":      "{:.1f}",
+                    "groups_avg_rating":        "{:.2f}",
+                    "therapists_avg_rating":    "{:.2f}",
                 },
                 na_rep="—",
             ),

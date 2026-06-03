@@ -7,26 +7,26 @@ import pandas as pd
 import requests
 import streamlit as st
 
-MATOMO_URL = st.secrets["matomo_url"]
-TOKEN = st.secrets["matomo_token"]
-SITE_ID = st.secrets["matomo_site_id"]
+REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
 
-_BASE_PARAMS = {
-    "module": "API",
-    "idSite": SITE_ID,
-    "token_auth": TOKEN,
-}
+
+def _base_params() -> dict:
+    return {
+        "module": "API",
+        "idSite": st.secrets["matomo_site_id"],
+        "token_auth": st.secrets["matomo_token"],
+    }
 
 
 def matomo_get(params: dict, expect_csv: bool = False):
     """Make a Matomo API GET request, merging base params. Returns parsed JSON or raw CSV text."""
-    merged = {**_BASE_PARAMS, **params}
+    merged = {**_base_params(), **params}
     if expect_csv:
         merged["format"] = "CSV"
     else:
         merged.setdefault("format", "JSON")
 
-    response = requests.get(MATOMO_URL, params=merged, timeout=60)
+    response = requests.get(st.secrets["matomo_url"], params=merged, timeout=60)
     response.raise_for_status()
 
     if expect_csv:
@@ -115,21 +115,22 @@ def get_last_login_per_user(
     return pd.DataFrame(records, columns=["user_id", "last_login_date"])
 
 
-def get_avg_visit_duration_by_user(date_range: str) -> pd.DataFrame:
+def get_visit_durations(date_range: str) -> pd.DataFrame:
     """
-    Fetches average visit duration per user over a date range.
+    Fetches raw visit durations over a date range.
 
     Matomo method: Live.getLastVisitsDetails (single bulk call)
     Segment: none — visit-level data, dimension10 filter does not apply.
-    visitDuration (seconds) is read directly from each visit object and
-    averaged per user_id in pandas.
+    visitDuration (seconds) is read directly from each visit object.
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
 
     Returns:
-        DataFrame with columns: user_id (str), avg_session_seconds (float)
+        DataFrame with columns:
+            user_id (str), visit_duration_seconds (float), has_deliver_action (bool)
     """
+    columns = ["user_id", "visit_duration_seconds", "has_deliver_action"]
     data = matomo_get(
         {
             "method": "Live.getLastVisitsDetails",
@@ -140,30 +141,26 @@ def get_avg_visit_duration_by_user(date_range: str) -> pd.DataFrame:
     )
 
     if not isinstance(data, list):
-        return pd.DataFrame(columns=["user_id", "avg_session_seconds"])
+        return pd.DataFrame(columns=columns)
 
     records = []
     for visit in data:
         user_id = visit.get("userId")
         if not user_id:
             continue
-        records.append({
-            "user_id": str(user_id),
-            "visit_duration": float(visit.get("visitDuration") or 0),
-        })
+        has_deliver_action = any(
+            _extract_dimension(action, "10") == "false"
+            for action in visit.get("actionDetails", [])
+        )
+        records.append(
+            {
+                "user_id": str(user_id),
+                "visit_duration_seconds": float(visit.get("visitDuration") or 0),
+                "has_deliver_action": has_deliver_action,
+            }
+        )
 
-    if not records:
-        return pd.DataFrame(columns=["user_id", "avg_session_seconds"])
-
-    df = pd.DataFrame(records)
-    result = (
-        df.groupby("user_id")["visit_duration"]
-        .mean()
-        .fillna(0.0)
-        .reset_index()
-        .rename(columns={"visit_duration": "avg_session_seconds"})
-    )
-    return result
+    return pd.DataFrame(records, columns=columns)
 
 
 def get_sessions_delivered(date_range: str) -> pd.DataFrame:
@@ -171,8 +168,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
-    Delivered-only filter: actions where dimension10 == "false" are included;
-    dimension10 == "true" (prepare/edit mode) are skipped.
+    Real delivered-session filter: only visits longer than 20 minutes are
+    eligible, and only actions where dimension10 == "false" are included;
+    dimension10 == "true" (prepare/edit mode) actions are skipped.
 
     bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
     session_id comes from dimension5.
@@ -198,6 +196,9 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
 
     records = []
     for visit in data:
+        visit_duration_seconds = float(visit.get("visitDuration") or 0)
+        if visit_duration_seconds <= REAL_SESSION_MIN_DURATION_SECONDS:
+            continue
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
