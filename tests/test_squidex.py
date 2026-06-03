@@ -74,7 +74,8 @@ def test_get_access_token_raises_on_http_error() -> None:
             )
 
 
-def test_get_activity_catalogue_returns_dict() -> None:
+def test_get_activity_catalogue_returns_dict(monkeypatch) -> None:
+    monkeypatch.setattr(squidex, "ACTIVITY_SCHEMA_NAMES", ("Activity",))
     graphql_response = {
         "data": {
             "queryActivityContents": [
@@ -93,6 +94,98 @@ def test_get_activity_catalogue_returns_dict() -> None:
     assert result == {"id-1": "Reality Orientation", "id-2": "Warm Up"}
 
 
+def test_get_activity_catalogue_queries_slot_specific_activity_schemas(monkeypatch) -> None:
+    monkeypatch.setattr(squidex, "ACTIVITY_SCHEMA_NAMES", ("Activity", "RoActivity"))
+    generic_response = _mock_post_response(
+        {
+            "data": {
+                "queryActivityContents": [
+                    {"id": "generic-id", "flatData": {"title": "Generic Activity"}},
+                ]
+            }
+        }
+    )
+    ro_response = _mock_post_response(
+        {
+            "data": {
+                "queryRoActivityContents": [
+                    {"id": "ro-id", "flatData": {"title": "Orientation"}},
+                ]
+            }
+        }
+    )
+
+    with patch("squidex.requests.post", side_effect=[generic_response, ro_response]):
+        result = squidex.get_activity_catalogue(
+            "https://cloud.squidex.io/", "ayla-app", "token-xyz"
+        )
+
+    assert result == {
+        "generic-id": "Generic Activity",
+        "ro-id": "Orientation",
+    }
+
+
+def test_get_activity_catalogue_skips_missing_schema_errors(monkeypatch) -> None:
+    monkeypatch.setattr(squidex, "ACTIVITY_SCHEMA_NAMES", ("Activity", "RoActivity"))
+    missing_schema_response = _mock_post_response(
+        {"errors": [{"message": "Cannot query field queryActivityContents"}]}
+    )
+    ro_response = _mock_post_response(
+        {
+            "data": {
+                "queryRoActivityContents": [
+                    {"id": "ro-id", "flatData": {"title": "Orientation"}},
+                ]
+            }
+        }
+    )
+
+    with patch("squidex.requests.post", side_effect=[missing_schema_response, ro_response]):
+        result = squidex.get_activity_catalogue(
+            "https://cloud.squidex.io/", "ayla-app", "token-xyz"
+        )
+
+    assert result == {"ro-id": "Orientation"}
+
+
+def test_get_activity_catalogue_paginates_schema_results(monkeypatch) -> None:
+    monkeypatch.setattr(squidex, "ACTIVITY_SCHEMA_NAMES", ("MainActivity",))
+    monkeypatch.setattr(squidex, "GRAPHQL_PAGE_SIZE", 2)
+    first_page = _mock_post_response(
+        {
+            "data": {
+                "queryMainActivityContents": [
+                    {"id": "main-1", "flatData": {"title": "Quiz"}},
+                    {"id": "main-2", "flatData": {"title": "Matching"}},
+                ]
+            }
+        }
+    )
+    second_page = _mock_post_response(
+        {
+            "data": {
+                "queryMainActivityContents": [
+                    {"id": "main-3", "flatData": {"title": "Sorting"}},
+                ]
+            }
+        }
+    )
+
+    with patch("squidex.requests.post", side_effect=[first_page, second_page]) as mock_post:
+        result = squidex.get_activity_catalogue(
+            "https://cloud.squidex.io/", "ayla-app", "token-xyz"
+        )
+
+    assert result == {
+        "main-1": "Quiz",
+        "main-2": "Matching",
+        "main-3": "Sorting",
+    }
+    assert mock_post.call_count == 2
+    assert "skip: 2" in mock_post.call_args_list[1].kwargs["json"]["query"]
+
+
 def test_get_activity_catalogue_returns_empty_on_request_failure() -> None:
     with patch("squidex.requests.post", side_effect=Exception("connection error")):
         result = squidex.get_activity_catalogue(
@@ -102,7 +195,8 @@ def test_get_activity_catalogue_returns_empty_on_request_failure() -> None:
     assert result == {}
 
 
-def test_get_activity_catalogue_handles_partial_catalogue() -> None:
+def test_get_activity_catalogue_handles_partial_catalogue(monkeypatch) -> None:
+    monkeypatch.setattr(squidex, "ACTIVITY_SCHEMA_NAMES", ("Activity",))
     # One item is missing the title key in flatData
     graphql_response = {
         "data": {
@@ -119,5 +213,4 @@ def test_get_activity_catalogue_handles_partial_catalogue() -> None:
             "https://cloud.squidex.io/", "ayla-app", "token-xyz"
         )
 
-    # KeyError on missing title is caught, returns {}
-    assert result == {}
+    assert result == {"id-1": "Reality Orientation"}

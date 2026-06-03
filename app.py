@@ -225,9 +225,11 @@ else:
         st.divider()
         st.subheader("Activity Usage (last 30 days)")
         if "activity_usage" in st.session_state:
+            _activity_usage = st.session_state["activity_usage"]
+            _activity_catalogue = st.session_state.get("activity_catalogue", {})
             _activity_usage_table = merger.build_activity_usage_table(
-                st.session_state["activity_usage"],
-                st.session_state.get("activity_catalogue", {}),
+                _activity_usage,
+                _activity_catalogue,
             )
             st.dataframe(
                 _activity_usage_table,
@@ -241,6 +243,30 @@ else:
                 ),
                 hide_index=True,
             )
+            _activity_catalogue_stats = merger.activity_catalogue_match_stats(
+                _activity_usage,
+                _activity_catalogue,
+            )
+            if _activity_catalogue_stats["usage_ids"] > 0:
+                if _activity_catalogue_stats["catalogue_ids"] == 0:
+                    st.warning(
+                        "Activity titles are not available because the Squidex "
+                        "catalogue returned 0 activities. Check the Squidex secrets."
+                    )
+                elif _activity_catalogue_stats["matched_ids"] == 0:
+                    st.warning(
+                        "Activity titles are not available because none of the "
+                        f"{_activity_catalogue_stats['usage_ids']} Matomo activity IDs "
+                        f"match the {_activity_catalogue_stats['catalogue_ids']} "
+                        "Squidex activity IDs. Check that `squidex_project` points at "
+                        "the same Squidex app/environment used by the tracked app."
+                    )
+                elif _activity_catalogue_stats["unmatched_ids"] > 0:
+                    st.warning(
+                        f"{_activity_catalogue_stats['unmatched_ids']} of "
+                        f"{_activity_catalogue_stats['usage_ids']} Matomo activity IDs "
+                        "could not be resolved to Squidex activity titles."
+                    )
 
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:

@@ -472,6 +472,33 @@ def test_build_activity_usage_table_empty_usage() -> None:
     assert "Completions" in result.columns
 
 
+def test_activity_catalogue_match_stats_all_miss() -> None:
+    usage = pd.DataFrame({"activity_id": ["a1", "b2"], "completion_count": [7, 2]})
+    result = merger.activity_catalogue_match_stats(usage, {"c3": "Warm Up"})
+
+    assert result == {
+        "usage_ids": 2,
+        "catalogue_ids": 1,
+        "matched_ids": 0,
+        "unmatched_ids": 2,
+    }
+
+
+def test_activity_catalogue_match_stats_partial_match() -> None:
+    usage = pd.DataFrame({"activity_id": ["a1", "b2", "b2"], "completion_count": [7, 2, 1]})
+    result = merger.activity_catalogue_match_stats(
+        usage,
+        {"a1": "Reality Orientation", "c3": "Warm Up"},
+    )
+
+    assert result == {
+        "usage_ids": 2,
+        "catalogue_ids": 2,
+        "matched_ids": 1,
+        "unmatched_ids": 1,
+    }
+
+
 def test_avg_activities_per_session_zero_sessions_delivered() -> None:
     """When sessions_delivered_30_days == 0, result must be 0.0 (not NaN or error)."""
     db_users = pd.DataFrame([

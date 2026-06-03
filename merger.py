@@ -393,3 +393,23 @@ def build_activity_usage_table(
         .sort_values("Completions", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def activity_catalogue_match_stats(
+    activity_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> dict[str, int]:
+    """Return match counts between Matomo activity IDs and Squidex catalogue IDs."""
+    usage_ids = (
+        set(activity_usage["activity_id"].dropna().astype(str))
+        if "activity_id" in activity_usage.columns
+        else set()
+    )
+    catalogue_ids = {str(key) for key in activity_catalogue.keys()}
+    matched_ids = usage_ids & catalogue_ids
+    return {
+        "usage_ids": len(usage_ids),
+        "catalogue_ids": len(catalogue_ids),
+        "matched_ids": len(matched_ids),
+        "unmatched_ids": len(usage_ids - catalogue_ids),
+    }
