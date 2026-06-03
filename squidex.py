@@ -1,12 +1,31 @@
 # Squidex CMS client — OAuth2 client credentials + GraphQL activity catalogue.
 #
-# Required st.secrets keys (flat, not per-region):
+# Optional st.secrets keys (flat, not per-region):
 #   squidex_base_url      — e.g. "https://cloud.squidex.io/"
 #   squidex_project       — e.g. "ayla-app"
 #   squidex_client_id     — OAuth2 client ID
 #   squidex_client_secret — OAuth2 client secret
 
 import requests
+
+
+SECRET_KEYS = (
+    "squidex_base_url",
+    "squidex_project",
+    "squidex_client_id",
+    "squidex_client_secret",
+)
+
+
+def get_settings_from_secrets(secrets) -> tuple[str, str, str, str] | None:
+    """Return Squidex settings when all optional secrets are configured."""
+    values = []
+    for key in SECRET_KEYS:
+        value = secrets.get(key)
+        if not value:
+            return None
+        values.append(value)
+    return tuple(values)
 
 
 def get_access_token(base_url: str, client_id: str, client_secret: str) -> str:

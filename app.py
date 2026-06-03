@@ -42,10 +42,10 @@ def _cached_activity_completions(date_range: str):
 @st.cache_data(ttl=3600)
 def _cached_activity_catalogue() -> dict:
     import squidex
-    base_url = st.secrets["squidex_base_url"]
-    project = st.secrets["squidex_project"]
-    client_id = st.secrets["squidex_client_id"]
-    client_secret = st.secrets["squidex_client_secret"]
+    settings = squidex.get_settings_from_secrets(st.secrets)
+    if settings is None:
+        return {}
+    base_url, project, client_id, client_secret = settings
     try:
         token = squidex.get_access_token(base_url, client_id, client_secret)
         return squidex.get_activity_catalogue(base_url, project, token)

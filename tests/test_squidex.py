@@ -18,6 +18,21 @@ sys.modules.setdefault("streamlit", streamlit_stub)
 import squidex
 
 
+def test_get_settings_from_secrets_returns_none_when_squidex_secrets_are_missing() -> None:
+    assert squidex.get_settings_from_secrets({}) is None
+
+
+def test_get_settings_from_secrets_returns_values_when_all_squidex_secrets_exist() -> None:
+    settings = squidex.get_settings_from_secrets(streamlit_stub.secrets)
+
+    assert settings == (
+        "https://cloud.squidex.io/",
+        "ayla-app",
+        "test-client",
+        "test-secret",
+    )
+
+
 def _mock_post_response(json_data: dict, status_code: int = 200) -> MagicMock:
     response = MagicMock()
     response.status_code = status_code
