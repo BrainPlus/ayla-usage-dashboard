@@ -32,7 +32,7 @@ def build_user_detail(
         DataFrame with columns:
             user_id, email, organisation_name, last_login_date,
             logins_30_days, logins_90_days, avg_real_session_minutes,
-            avg_prepare_minutes, short_visit_count, activities_completed
+            median_prepare_minutes, short_visit_count, activities_completed
     """
     df = db_users.copy()
     duration_metrics = _build_visit_duration_metrics(visit_durations)
@@ -57,8 +57,8 @@ def build_user_detail(
         .fillna(0.0)
         .astype(float)
     )
-    df["avg_prepare_minutes"] = (
-        pd.to_numeric(df["avg_prepare_minutes"], errors="coerce")
+    df["median_prepare_minutes"] = (
+        pd.to_numeric(df["median_prepare_minutes"], errors="coerce")
         .fillna(0.0)
         .astype(float)
     )
@@ -75,7 +75,7 @@ def build_user_detail(
         "logins_30_days",
         "logins_90_days",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
         "short_visit_count",
         "activities_completed",
     ]]
@@ -105,7 +105,7 @@ def build_org_summary(
         DataFrame with columns:
             organisation_name, total_users, active_users_30,
             logins_30_days, logins_90_days, avg_real_session_minutes,
-            avg_prepare_minutes, short_visit_count,
+            median_prepare_minutes, short_visit_count,
             sessions_delivered_30_days, sessions_delivered_90_days,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
@@ -122,13 +122,13 @@ def build_org_summary(
         logins_30_days=("logins_30_days", "sum"),
         logins_90_days=("logins_90_days", "sum"),
         avg_real_session_minutes=("avg_real_session_minutes", lambda s: s[s > 0].mean()),
-        avg_prepare_minutes=("avg_prepare_minutes", lambda s: s[s > 0].mean()),
+        median_prepare_minutes=("median_prepare_minutes", lambda s: s[s > 0].median()),
         short_visit_count=("short_visit_count", "sum"),
         active_users_30=("logins_30_days", lambda s: (s >= 2).sum()),
     ).reset_index()
 
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].round(1)
-    agg["avg_prepare_minutes"] = agg["avg_prepare_minutes"].round(1)
+    agg["median_prepare_minutes"] = agg["median_prepare_minutes"].round(1)
     agg = agg.merge(last_login_by_org, on="organisation_name", how="left")
     agg["last_login_date"] = agg["last_login_date"].fillna(_NO_USAGE)
 
@@ -195,7 +195,7 @@ def build_org_summary(
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].fillna(0.0)
-    agg["avg_prepare_minutes"] = agg["avg_prepare_minutes"].fillna(0.0)
+    agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
 
@@ -213,7 +213,7 @@ def build_org_summary(
         "logins_30_days",
         "logins_90_days",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
         "short_visit_count",
         "sessions_delivered_30_days",
         "sessions_delivered_90_days",
@@ -227,7 +227,7 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
     columns = [
         "user_id",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
         "short_visit_count",
     ]
     if visit_durations.empty:
@@ -258,9 +258,9 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
         .reset_index(name="avg_real_session_minutes")
     )
     prepare_averages = (
-        (prepare_visits.groupby("user_id")["visit_duration_seconds"].mean() / 60)
+        (prepare_visits.groupby("user_id")["visit_duration_seconds"].median() / 60)
         .round(1)
-        .reset_index(name="avg_prepare_minutes")
+        .reset_index(name="median_prepare_minutes")
     )
     short_counts = (
         short_visits.groupby("user_id")
@@ -272,7 +272,7 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
     metrics = metrics.merge(prepare_averages, on="user_id", how="left")
     metrics = metrics.merge(short_counts, on="user_id", how="left")
     metrics["avg_real_session_minutes"] = metrics["avg_real_session_minutes"].fillna(0.0)
-    metrics["avg_prepare_minutes"] = metrics["avg_prepare_minutes"].fillna(0.0)
+    metrics["median_prepare_minutes"] = metrics["median_prepare_minutes"].fillna(0.0)
     metrics["short_visit_count"] = metrics["short_visit_count"].fillna(0).astype(int)
     return metrics[columns]
 

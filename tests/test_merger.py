@@ -61,7 +61,7 @@ def test_real_session_only_sets_real_average() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 25.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -80,7 +80,7 @@ def test_short_visit_only_increments_short_visit_count() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 1
 
 
@@ -99,7 +99,7 @@ def test_prepare_only_visit_sets_prepare_average() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 12.0
+    assert row["median_prepare_minutes"] == 12.0
     assert row["short_visit_count"] == 0
 
 
@@ -118,7 +118,7 @@ def test_mixed_visit_is_classified_as_deliver() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 30.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -129,7 +129,7 @@ def test_user_with_no_visits_gets_zero_duration_metrics() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -138,7 +138,7 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
         user_detail = _build_user_detail(_visit_durations([]))
 
         assert user_detail["avg_real_session_minutes"].dtype == "float64"
-        assert user_detail["avg_prepare_minutes"].dtype == "float64"
+        assert user_detail["median_prepare_minutes"].dtype == "float64"
 
         org_summary = merger.build_org_summary(
             user_detail,
@@ -150,10 +150,10 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
 
     row = org_summary.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
 
 
-def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
+def test_org_summary_sums_short_visits_and_uses_median_of_user_medians() -> None:
     db_users = pd.DataFrame(
         [
             {
@@ -244,4 +244,57 @@ def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
     row = org_summary.iloc[0]
     assert row["short_visit_count"] == 3
     assert row["avg_real_session_minutes"] == 67.5
-    assert row["avg_prepare_minutes"] == 30.0
+    assert row["median_prepare_minutes"] == 30.0
+
+
+def test_prepare_median_not_mean() -> None:
+    """Skewed distribution: median (10) != mean (25) — verifies we use median."""
+    result = _build_user_detail(
+        _visit_durations(
+            [
+                {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": False},
+            ]
+        )
+    )
+
+    row = result.iloc[0]
+    assert row["median_prepare_minutes"] == 10.0  # median, not mean (25.0)
+
+
+def test_org_summary_two_level_median() -> None:
+    """Org-level aggregation uses median of per-user medians."""
+    db_users = pd.DataFrame(
+        [
+            {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+            {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+        ]
+    )
+    user_detail = _build_user_detail(
+        _visit_durations(
+            [
+                # u1: prepare visits 5, 10, 60 min -> median 10.0
+                {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": False},
+                # u2: prepare visits 20, 30 min -> median 25.0
+                {"user_id": "u2", "visit_duration_seconds": 20 * 60, "has_deliver_action": False},
+                {"user_id": "u2", "visit_duration_seconds": 30 * 60, "has_deliver_action": False},
+            ]
+        ),
+        db_users=db_users,
+    )
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+    )
+
+    row = org_summary.iloc[0]
+    # median of user medians: median([10.0, 25.0]) = 17.5
+    assert row["median_prepare_minutes"] == 17.5
+

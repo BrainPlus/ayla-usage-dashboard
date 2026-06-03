@@ -224,8 +224,8 @@ else:
                     ),
                     format="%.1f",
                 ),
-                "avg_prepare_minutes": st.column_config.NumberColumn(
-                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                "median_prepare_minutes": st.column_config.NumberColumn(
+                    help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(
@@ -302,8 +302,8 @@ else:
                     ),
                     format="%.1f",
                 ),
-                "avg_prepare_minutes": st.column_config.NumberColumn(
-                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                "median_prepare_minutes": st.column_config.NumberColumn(
+                    help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(
