@@ -38,6 +38,20 @@ def _cached_activity_completions(date_range: str):
 
 
 @st.cache_data(ttl=3600)
+def _cached_activity_catalogue() -> dict:
+    import squidex
+    base_url = st.secrets["squidex_base_url"]
+    project = st.secrets["squidex_project"]
+    client_id = st.secrets["squidex_client_id"]
+    client_secret = st.secrets["squidex_client_secret"]
+    try:
+        token = squidex.get_access_token(base_url, client_id, client_secret)
+        return squidex.get_activity_catalogue(base_url, project, token)
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=3600)
 def _cached_visit_durations(date_range: str):
     return matomo.get_visit_durations(date_range)
 
@@ -85,6 +99,7 @@ if pull:
             sessions_30 = _cached_sessions_delivered(date_range_30)
             sessions_90 = _cached_sessions_delivered(date_range_90)
             activity_completions = _cached_activity_completions(date_range_30)
+            activity_catalogue = _cached_activity_catalogue()
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = sorted(
@@ -128,6 +143,7 @@ if pull:
             "global_summary": global_summary,
             "monthly_ratings": monthly_ratings,
             "bundle_counts": bundle_counts,
+            "activity_catalogue": activity_catalogue,
             "region": region,
             "date_range_30": date_range_30,
             "date_range_90": date_range_90,
