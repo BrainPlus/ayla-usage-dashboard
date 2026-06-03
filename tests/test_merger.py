@@ -400,3 +400,68 @@ def test_org_min_max_no_real_sessions() -> None:
     row = org_summary.iloc[0]
     assert row["min_real_session_minutes"] == 0.0
     assert row["max_real_session_minutes"] == 0.0
+
+
+
+def test_avg_activities_per_session_basic() -> None:
+    """Sum activities_completed across users, divide by sessions_delivered_30_days."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    activity_completions = pd.DataFrame([
+        {"user_id": "u1", "activities_completed": 10},
+        {"user_id": "u2", "activities_completed": 5},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        activity_completions,
+    )
+    sessions_30 = pd.DataFrame([
+        {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+        {"bundle_id": "b1", "session_id": "s3", "user_id": "u2"},
+    ])
+    org_summary = merger.build_org_summary(
+        user_detail,
+        sessions_30,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
+    )
+    row = org_summary.iloc[0]
+    assert row["avg_activities_per_session"] == 5.0  # 15 / 3 = 5.0
+
+
+def test_avg_activities_per_session_zero_sessions_delivered() -> None:
+    """When sessions_delivered_30_days == 0, result must be 0.0 (not NaN or error)."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    activity_completions = pd.DataFrame([
+        {"user_id": "u1", "activities_completed": 8},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        activity_completions,
+    )
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+    row = org_summary.iloc[0]
+    assert row["avg_activities_per_session"] == 0.0
+    assert not pd.isna(row["avg_activities_per_session"])

@@ -39,6 +39,11 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
             "Sessions delivered",
             "Unique (bundleId + sessionId) pairs from delivered sessions only (editMode=false)",
         ),
+        (
+            "Avg activities per session",
+            "Total Activity Complete events divided by sessions delivered (30-day window). "
+            "Note: fires on forward navigation — rapid click-through may inflate this count.",
+        ),
         ("Last login date", "Most recent recorded Matomo visit date"),
         (
             "Groups avg rating",

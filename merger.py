@@ -163,6 +163,15 @@ def build_org_summary(
     agg = agg.merge(s30, on="organisation_name", how="left")
     agg = agg.merge(s90, on="organisation_name", how="left")
 
+    # --- avg activities per session (30-day window) ---
+    activities_by_org = (
+        user_detail.groupby("organisation_name")["activities_completed"]
+        .sum()
+        .reset_index(name="total_activities_completed")
+    )
+    agg = agg.merge(activities_by_org, on="organisation_name", how="left")
+    agg["total_activities_completed"] = agg["total_activities_completed"].fillna(0).astype(int)
+
     # --- star ratings: pivot target → groups_avg_rating / therapists_avg_rating ---
     if not star_ratings.empty:
         ratings_pivot = (
@@ -201,6 +210,14 @@ def build_org_summary(
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
+
+    agg["avg_activities_per_session"] = agg.apply(
+        lambda r: round(r["total_activities_completed"] / r["sessions_delivered_30_days"], 1)
+        if r["sessions_delivered_30_days"] > 0
+        else 0.0,
+        axis=1,
+    )
+    agg = agg.drop(columns=["total_activities_completed"])
 
     # --- org-level min/max real session duration from raw visits ---
     if visit_durations is not None and not visit_durations.empty:
@@ -251,6 +268,7 @@ def build_org_summary(
         "short_visit_count",
         "sessions_delivered_30_days",
         "sessions_delivered_90_days",
+        "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",

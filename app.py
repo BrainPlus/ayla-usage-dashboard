@@ -257,6 +257,14 @@ else:
                         "Different unit from visit-based duration metrics."
                     ),
                 ),
+                "avg_activities_per_session": st.column_config.NumberColumn(
+                    help=(
+                        "Total Activity Complete events (30-day window) divided by sessions "
+                        "delivered (30-day window). Note: the Activity Complete event fires on "
+                        "forward navigation, so rapid click-through may inflate this count."
+                    ),
+                    format="%.1f",
+                ),
                 "last_login_date": st.column_config.TextColumn(
                     help="Most recent Matomo visit date for any user in this organisation",
                 ),
