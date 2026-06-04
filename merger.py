@@ -374,23 +374,100 @@ def build_activity_usage_table(
     Returns a DataFrame sorted by Completions descending.
 
     Args:
-        activity_usage:    DataFrame with columns: activity_id (str), completion_count (int)
+        activity_usage:    DataFrame with columns: activity_id (str), completion_count (int),
+                           optionally language (str)
         activity_catalogue: dict mapping activity_id → title from Squidex
 
     Returns:
-        DataFrame with columns: Activity Name (str), Completions (int)
+        DataFrame with columns: Activity Name (str), optional Language (str),
+        Completions (int)
     """
     if activity_usage.empty:
-        return pd.DataFrame(columns=["Activity Name", "Completions"])
+        columns = ["Activity Name", "Completions"]
+        if "language" in activity_usage.columns:
+            columns.insert(1, "Language")
+        return pd.DataFrame(columns=columns)
 
     df = activity_usage.copy()
+    group_columns = ["activity_id"]
+    output_columns = ["Activity Name"]
+    if "language" in df.columns:
+        df["Language"] = df["language"].map(_normalise_activity_language)
+        group_columns.append("Language")
+        output_columns.append("Language")
+
+    df["completion_count"] = pd.to_numeric(
+        df["completion_count"], errors="coerce",
+    ).fillna(0).astype(int)
+    df = (
+        df.groupby(group_columns, dropna=False)["completion_count"]
+        .sum()
+        .reset_index()
+    )
+    if "Language" in df.columns:
+        df["Language"] = df["Language"].map(format_activity_language_filter)
     df["Activity Name"] = df["activity_id"].map(activity_catalogue).fillna(df["activity_id"])
     df = df.rename(columns={"completion_count": "Completions"})
+    output_columns.append("Completions")
     return (
-        df[["Activity Name", "Completions"]]
+        df[output_columns]
         .sort_values("Completions", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def activity_language_filter_options(activity_usage: pd.DataFrame) -> list[str]:
+    """Return available activity language filter values, with all languages first."""
+    if activity_usage.empty or "language" not in activity_usage.columns:
+        return ["all"]
+
+    languages = {
+        _normalise_activity_language(value)
+        for value in activity_usage["language"].dropna()
+    }
+    if not languages:
+        return ["all"]
+
+    preferred_order = ["uk", "dk", "de"]
+    known_languages = [
+        language for language in preferred_order if language in languages
+    ]
+    known_languages.extend(
+        sorted(
+            language
+            for language in languages
+            if language != "unknown" and language not in preferred_order
+        )
+    )
+    if "unknown" in languages:
+        known_languages.append("unknown")
+    return ["all", *known_languages]
+
+
+def filter_activity_usage_by_language(
+    activity_usage: pd.DataFrame,
+    language_filter: str,
+) -> pd.DataFrame:
+    """Filter activity usage rows by normalised Matomo language code."""
+    if (
+        activity_usage.empty
+        or language_filter == "all"
+        or "language" not in activity_usage.columns
+    ):
+        return activity_usage.copy()
+
+    df = activity_usage.copy()
+    normalised = df["language"].map(_normalise_activity_language)
+    return df[normalised == language_filter].reset_index(drop=True)
+
+
+def format_activity_language_filter(language_filter: str) -> str:
+    """Format activity language filter values for Streamlit controls."""
+    if language_filter == "all":
+        return "All"
+    if language_filter == "unknown":
+        return "Unknown"
+    return language_filter.upper()
 
 
 def activity_catalogue_match_stats(
@@ -411,3 +488,28 @@ def activity_catalogue_match_stats(
         "matched_ids": len(matched_ids),
         "unmatched_ids": len(usage_ids - catalogue_ids),
     }
+
+
+def _normalise_activity_language(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("_", "-")
+    if not raw or raw in {"none", "nan"}:
+        return "unknown"
+
+    mappings = {
+        "da": "dk",
+        "da-dk": "dk",
+        "dk": "dk",
+        "de": "de",
+        "de-de": "de",
+        "en": "uk",
+        "en-gb": "uk",
+        "gb": "uk",
+        "uk": "uk",
+    }
+    if raw in mappings:
+        return mappings[raw]
+
+    if "-" in raw:
+        return raw.rsplit("-", 1)[-1]
+
+    return raw

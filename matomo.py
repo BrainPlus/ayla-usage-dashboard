@@ -256,20 +256,21 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
 
 def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
     """
-    Counts Activity Complete events per activityId in delivered sessions only.
+    Counts Activity Complete events per activityId and language in delivered sessions only.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
     Counts actions where type="event", eventCategory="Activity",
     eventAction="Activity Complete", AND dimension10=="false" (deliver mode only).
     activityId comes from dimension6.
+    language comes from dimension2.
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
 
     Returns:
-        DataFrame with columns: activity_id (str), completion_count (int)
+        DataFrame with columns: activity_id (str), language (str), completion_count (int)
     """
-    empty = pd.DataFrame(columns=["activity_id", "completion_count"])
+    empty = pd.DataFrame(columns=["activity_id", "language", "completion_count"])
     data = matomo_get(
         {
             "method": "Live.getLastVisitsDetails",
@@ -282,7 +283,7 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
     if not isinstance(data, list):
         return empty
 
-    counts: dict[str, int] = {}
+    counts: dict[tuple[str, str], int] = {}
     for visit in data:
         for action in visit.get("actionDetails", []):
             if (
@@ -293,14 +294,20 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
             ):
                 activity_id = _extract_dimension(action, "6")
                 if activity_id:
-                    counts[activity_id] = counts.get(activity_id, 0) + 1
+                    language = _extract_dimension(action, "2")
+                    key = (activity_id, language)
+                    counts[key] = counts.get(key, 0) + 1
 
     if not counts:
         return empty
     df = pd.DataFrame(
-        [{"activity_id": k, "completion_count": v} for k, v in counts.items()]
+        [
+            {"activity_id": activity_id, "language": language, "completion_count": count}
+            for (activity_id, language), count in counts.items()
+        ]
     )
     df["activity_id"] = df["activity_id"].astype(str)
+    df["language"] = df["language"].astype(str)
     df["completion_count"] = df["completion_count"].astype(int)
     return df
 

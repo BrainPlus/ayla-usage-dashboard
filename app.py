@@ -227,8 +227,23 @@ else:
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
             _activity_catalogue = st.session_state.get("activity_catalogue", {})
-            _activity_usage_table = merger.build_activity_usage_table(
+            _activity_language_options = merger.activity_language_filter_options(_activity_usage)
+            _activity_language_filter = (
+                st.selectbox(
+                    "Activity language",
+                    _activity_language_options,
+                    format_func=merger.format_activity_language_filter,
+                    key="activity_language_filter",
+                )
+                if len(_activity_language_options) > 1
+                else "all"
+            )
+            _filtered_activity_usage = merger.filter_activity_usage_by_language(
                 _activity_usage,
+                _activity_language_filter,
+            )
+            _activity_usage_table = merger.build_activity_usage_table(
+                _filtered_activity_usage,
                 _activity_catalogue,
             )
             st.dataframe(
@@ -238,13 +253,14 @@ else:
                     _activity_usage_table,
                     {
                         "Activity Name": st.column_config.TextColumn("Activity Name"),
+                        "Language": st.column_config.TextColumn("Language"),
                         "Completions": st.column_config.NumberColumn("Completions", format="%d"),
                     },
                 ),
                 hide_index=True,
             )
             _activity_catalogue_stats = merger.activity_catalogue_match_stats(
-                _activity_usage,
+                _filtered_activity_usage,
                 _activity_catalogue,
             )
             if _activity_catalogue_stats["usage_ids"] > 0:
@@ -420,6 +436,12 @@ else:
 
 if "user_detail" in st.session_state:
     st.divider()
+    _download_activity_usage = st.session_state.get("activity_usage", pd.DataFrame())
+    _download_activity_language_filter = st.session_state.get("activity_language_filter", "all")
+    _download_activity_usage = merger.filter_activity_usage_by_language(
+        _download_activity_usage,
+        _download_activity_language_filter,
+    )
     excel_bytes = exporter.build_excel_report(
         st.session_state["user_detail"],
         st.session_state["org_summary"],
@@ -428,7 +450,7 @@ if "user_detail" in st.session_state:
         st.session_state["date_range_30"],
         st.session_state["date_range_90"],
         activity_usage_table=merger.build_activity_usage_table(
-            st.session_state.get("activity_usage", pd.DataFrame()),
+            _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
         ),
     )

@@ -72,6 +72,7 @@ def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
                     "eventAction": "Activity Complete",
                     "dimension10": "false",
                     "dimension6": "act-123",
+                    "dimension2": "da-DK",
                 },
                 {
                     "type": "event",
@@ -87,7 +88,44 @@ def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
     result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
     assert len(result) == 1
     assert result.iloc[0]["activity_id"] == "act-123"
+    assert result.iloc[0]["language"] == "da-DK"
     assert result.iloc[0]["completion_count"] == 1
+
+
+def test_get_activity_usage_by_id_counts_same_activity_per_language(monkeypatch) -> None:
+    visits = [
+        {
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Complete",
+                    "dimension10": "false",
+                    "dimension6": "act-123",
+                    "dimension2": "en-GB",
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Complete",
+                    "dimension10": "false",
+                    "dimension6": "act-123",
+                    "dimension2": "da-DK",
+                },
+            ]
+        }
+    ]
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
+
+    result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
+
+    assert {
+        (row["activity_id"], row["language"], row["completion_count"])
+        for row in result.to_dict("records")
+    } == {
+        ("act-123", "en-GB", 1),
+        ("act-123", "da-DK", 1),
+    }
 
 
 def test_get_activity_usage_by_id_non_list_returns_empty(monkeypatch) -> None:
@@ -96,4 +134,5 @@ def test_get_activity_usage_by_id_non_list_returns_empty(monkeypatch) -> None:
     result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
     assert result.empty
     assert "activity_id" in result.columns
+    assert "language" in result.columns
     assert "completion_count" in result.columns

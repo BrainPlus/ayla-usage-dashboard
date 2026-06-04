@@ -472,6 +472,53 @@ def test_build_activity_usage_table_empty_usage() -> None:
     assert "Completions" in result.columns
 
 
+def test_build_activity_usage_table_includes_normalised_language() -> None:
+    usage = pd.DataFrame(
+        {
+            "activity_id": ["abc", "abc", "def"],
+            "language": ["en-GB", "en", "da-DK"],
+            "completion_count": [5, 2, 10],
+        }
+    )
+    catalogue = {"abc": "Reality Orientation", "def": "Warm Up"}
+
+    result = merger.build_activity_usage_table(usage, catalogue)
+
+    assert list(result.columns) == ["Activity Name", "Language", "Completions"]
+    assert result.to_dict("records") == [
+        {"Activity Name": "Warm Up", "Language": "DK", "Completions": 10},
+        {"Activity Name": "Reality Orientation", "Language": "UK", "Completions": 7},
+    ]
+
+
+def test_activity_language_filter_options_normalise_common_locales() -> None:
+    usage = pd.DataFrame(
+        {
+            "activity_id": ["a", "b", "c", "d"],
+            "language": ["en-GB", "da-DK", "de-DE", ""],
+            "completion_count": [1, 1, 1, 1],
+        }
+    )
+
+    result = merger.activity_language_filter_options(usage)
+
+    assert result == ["all", "uk", "dk", "de", "unknown"]
+
+
+def test_filter_activity_usage_by_language_uses_normalised_locale() -> None:
+    usage = pd.DataFrame(
+        {
+            "activity_id": ["a", "b", "c"],
+            "language": ["en-GB", "en", "da-DK"],
+            "completion_count": [1, 2, 3],
+        }
+    )
+
+    result = merger.filter_activity_usage_by_language(usage, "uk")
+
+    assert list(result["activity_id"]) == ["a", "b"]
+
+
 def test_activity_catalogue_match_stats_all_miss() -> None:
     usage = pd.DataFrame({"activity_id": ["a1", "b2"], "completion_count": [7, 2]})
     result = merger.activity_catalogue_match_stats(usage, {"c3": "Warm Up"})
