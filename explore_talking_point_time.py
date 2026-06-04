@@ -22,6 +22,8 @@ from pathlib import Path
 
 import requests
 
+import squidex
+
 # --- config ---
 
 SECRETS_PATH = Path(__file__).parent / ".streamlit" / "secrets.toml"
@@ -98,6 +100,19 @@ if not isinstance(raw, list):
 
 print(f"Got {len(raw)} visits.", flush=True)
 
+# --- fetch activity names from Squidex ---
+
+print("Fetching activity catalogue from Squidex...", flush=True)
+_squidex_settings = squidex.get_settings_from_secrets(_secrets)
+if _squidex_settings:
+    base_url, project, client_id, client_secret = _squidex_settings
+    token = squidex.get_access_token(base_url, client_id, client_secret)
+    activity_names: dict[str, str] = squidex.get_activity_catalogue(base_url, project, token)
+    print(f"Got {len(activity_names)} activity names.", flush=True)
+else:
+    activity_names = {}
+    print("Squidex secrets not configured — activity_name column will be empty.", flush=True)
+
 # --- extract forward-click events and compute deltas ---
 
 rows = []
@@ -112,7 +127,7 @@ for visit in raw:
             or action.get("eventAction") != "Step Forward Click"
         ):
             continue
-        ts = action.get("serverTimestamp")
+        ts = action.get("timestamp")
         if ts is None:
             continue
         clicks.append({
@@ -137,6 +152,7 @@ for visit in raw:
             "bundle_id": curr["bundle_id"],
             "session_id": curr["session_id"],
             "activity_id": curr["activity_id"],
+            "activity_name": activity_names.get(curr["activity_id"], ""),
             "step_id": curr["step_id"],
             "route": curr["route"],
             "duration_seconds": delta,
@@ -146,8 +162,8 @@ for visit in raw:
 
 # --- write CSV ---
 
-fieldnames = ["bundle_id", "session_id", "activity_id", "step_id", "route",
-              "duration_seconds", "is_quick", "is_idle"]
+fieldnames = ["bundle_id", "session_id", "activity_id", "activity_name",
+              "step_id", "route", "duration_seconds", "is_quick", "is_idle"]
 
 with open(OUTPUT_CSV, "w", newline="") as f:
     writer = csv.DictWriter(f, fieldnames=fieldnames)
