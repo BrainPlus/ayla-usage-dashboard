@@ -36,3 +36,21 @@ def test_cached_activity_catalogue_returns_empty_when_squidex_secrets_are_missin
     app = importlib.import_module("app")
 
     assert app._cached_activity_catalogue() == {}
+
+
+def test_cached_activity_usage_reloads_stale_matomo_module(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
+    sys.modules.pop("app", None)
+
+    app = importlib.import_module("app")
+    stale_matomo = ModuleType("matomo")
+    fresh_matomo = ModuleType("matomo")
+    fresh_matomo.get_activity_usage_by_id = lambda date_range: f"usage:{date_range}"
+
+    monkeypatch.setattr(app, "matomo", stale_matomo)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_matomo)
+
+    assert app._cached_activity_usage("2026-01-01,2026-01-31") == (
+        "usage:2026-01-01,2026-01-31"
+    )
+    assert app.matomo is fresh_matomo

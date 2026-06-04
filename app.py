@@ -1,5 +1,6 @@
 # Streamlit entry point: sidebar region selector, three-tab layout (Global Overview, By Organisation, By User).
 
+import importlib
 import streamlit as st
 from datetime import date, timedelta
 
@@ -19,6 +20,13 @@ def _column_config_for(dataframe, column_config):
         for column_name, config in column_config.items()
         if column_name in dataframe.columns
     }
+
+
+def _get_activity_usage_by_id(date_range: str):
+    global matomo
+    if not hasattr(matomo, "get_activity_usage_by_id"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_activity_usage_by_id(date_range)
 
 
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
@@ -55,7 +63,7 @@ def _cached_activity_catalogue() -> dict:
 
 @st.cache_data(ttl=3600)
 def _cached_activity_usage(date_range: str):
-    return matomo.get_activity_usage_by_id(date_range)
+    return _get_activity_usage_by_id(date_range)
 
 
 @st.cache_data(ttl=3600)
