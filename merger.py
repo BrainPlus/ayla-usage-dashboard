@@ -32,7 +32,7 @@ def build_user_detail(
         DataFrame with columns:
             user_id, email, organisation_name, last_login_date,
             logins_30_days, logins_90_days, avg_real_session_minutes,
-            avg_prepare_minutes, short_visit_count, activities_completed
+            median_prepare_minutes, short_visit_count, activities_completed
     """
     df = db_users.copy()
     duration_metrics = _build_visit_duration_metrics(visit_durations)
@@ -57,8 +57,8 @@ def build_user_detail(
         .fillna(0.0)
         .astype(float)
     )
-    df["avg_prepare_minutes"] = (
-        pd.to_numeric(df["avg_prepare_minutes"], errors="coerce")
+    df["median_prepare_minutes"] = (
+        pd.to_numeric(df["median_prepare_minutes"], errors="coerce")
         .fillna(0.0)
         .astype(float)
     )
@@ -75,7 +75,7 @@ def build_user_detail(
         "logins_30_days",
         "logins_90_days",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
         "short_visit_count",
         "activities_completed",
     ]]
@@ -87,6 +87,7 @@ def build_org_summary(
     sessions_delivered_90: pd.DataFrame,
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
+    visit_durations: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -100,13 +101,15 @@ def build_org_summary(
         sessions_delivered_90:  bundle_id, session_id, user_id  (90-day window)
         star_ratings:           organisation_name, target, avg_rating, total_responses
         org_user_counts:        organisation_name, user_count
+        visit_durations:        user_id, visit_duration_seconds, has_deliver_action
+                                (raw visits — used for org-level min/max real session time)
 
     Returns:
         DataFrame with columns:
             organisation_name, total_users, active_users_30,
             logins_30_days, logins_90_days, avg_real_session_minutes,
-            avg_prepare_minutes, short_visit_count,
-            sessions_delivered_30_days, sessions_delivered_90_days,
+            median_prepare_minutes, min_real_session_minutes, max_real_session_minutes,
+            short_visit_count, sessions_delivered_30_days, sessions_delivered_90_days,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
     # --- aggregate user_detail by org ---
@@ -122,13 +125,13 @@ def build_org_summary(
         logins_30_days=("logins_30_days", "sum"),
         logins_90_days=("logins_90_days", "sum"),
         avg_real_session_minutes=("avg_real_session_minutes", lambda s: s[s > 0].mean()),
-        avg_prepare_minutes=("avg_prepare_minutes", lambda s: s[s > 0].mean()),
+        median_prepare_minutes=("median_prepare_minutes", lambda s: s[s > 0].median()),
         short_visit_count=("short_visit_count", "sum"),
         active_users_30=("logins_30_days", lambda s: (s >= 2).sum()),
     ).reset_index()
 
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].round(1)
-    agg["avg_prepare_minutes"] = agg["avg_prepare_minutes"].round(1)
+    agg["median_prepare_minutes"] = agg["median_prepare_minutes"].round(1)
     agg = agg.merge(last_login_by_org, on="organisation_name", how="left")
     agg["last_login_date"] = agg["last_login_date"].fillna(_NO_USAGE)
 
@@ -159,6 +162,15 @@ def build_org_summary(
 
     agg = agg.merge(s30, on="organisation_name", how="left")
     agg = agg.merge(s90, on="organisation_name", how="left")
+
+    # --- avg activities per session (30-day window) ---
+    activities_by_org = (
+        user_detail.groupby("organisation_name")["activities_completed"]
+        .sum()
+        .reset_index(name="total_activities_completed")
+    )
+    agg = agg.merge(activities_by_org, on="organisation_name", how="left")
+    agg["total_activities_completed"] = agg["total_activities_completed"].fillna(0).astype(int)
 
     # --- star ratings: pivot target → groups_avg_rating / therapists_avg_rating ---
     if not star_ratings.empty:
@@ -195,9 +207,44 @@ def build_org_summary(
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].fillna(0.0)
-    agg["avg_prepare_minutes"] = agg["avg_prepare_minutes"].fillna(0.0)
+    agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
+
+    denom = agg["sessions_delivered_30_days"].replace(0, pd.NA)
+    agg["avg_activities_per_session"] = (
+        (agg["total_activities_completed"] / denom).fillna(0.0).round(1)
+    )
+    agg = agg.drop(columns=["total_activities_completed"])
+
+    # --- org-level min/max real session duration from raw visits ---
+    if visit_durations is not None and not visit_durations.empty:
+        vd = visit_durations.copy()
+        vd["user_id"] = vd["user_id"].astype(str)
+        vd["visit_duration_seconds"] = pd.to_numeric(vd["visit_duration_seconds"], errors="coerce").fillna(0.0)
+        vd["has_deliver_action"] = vd["has_deliver_action"].fillna(False).astype(bool)
+        real_vd = vd[vd["has_deliver_action"] & (vd["visit_duration_seconds"] > _REAL_SESSION_MIN_SECONDS)]
+        if not real_vd.empty:
+            real_vd = real_vd.merge(
+                user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+                on="user_id", how="left",
+            )
+            minmax = (
+                real_vd.groupby("organisation_name")["visit_duration_seconds"]
+                .agg(min_real_session_minutes="min", max_real_session_minutes="max")
+                .reset_index()
+            )
+            minmax["min_real_session_minutes"] = (minmax["min_real_session_minutes"] / 60).round(1)
+            minmax["max_real_session_minutes"] = (minmax["max_real_session_minutes"] / 60).round(1)
+            agg = agg.merge(minmax, on="organisation_name", how="left")
+        else:
+            agg["min_real_session_minutes"] = 0.0
+            agg["max_real_session_minutes"] = 0.0
+    else:
+        agg["min_real_session_minutes"] = 0.0
+        agg["max_real_session_minutes"] = 0.0
+    agg["min_real_session_minutes"] = agg["min_real_session_minutes"].fillna(0.0)
+    agg["max_real_session_minutes"] = agg["max_real_session_minutes"].fillna(0.0)
 
     # --- sort: alphabetical, "Unassigned / No organisation" last ---
     is_unassigned = agg["organisation_name"] == _NO_ORG
@@ -213,10 +260,13 @@ def build_org_summary(
         "logins_30_days",
         "logins_90_days",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
+        "min_real_session_minutes",
+        "max_real_session_minutes",
         "short_visit_count",
         "sessions_delivered_30_days",
         "sessions_delivered_90_days",
+        "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",
@@ -227,7 +277,7 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
     columns = [
         "user_id",
         "avg_real_session_minutes",
-        "avg_prepare_minutes",
+        "median_prepare_minutes",
         "short_visit_count",
     ]
     if visit_durations.empty:
@@ -258,9 +308,9 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
         .reset_index(name="avg_real_session_minutes")
     )
     prepare_averages = (
-        (prepare_visits.groupby("user_id")["visit_duration_seconds"].mean() / 60)
+        (prepare_visits.groupby("user_id")["visit_duration_seconds"].median() / 60)
         .round(1)
-        .reset_index(name="avg_prepare_minutes")
+        .reset_index(name="median_prepare_minutes")
     )
     short_counts = (
         short_visits.groupby("user_id")
@@ -272,7 +322,7 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
     metrics = metrics.merge(prepare_averages, on="user_id", how="left")
     metrics = metrics.merge(short_counts, on="user_id", how="left")
     metrics["avg_real_session_minutes"] = metrics["avg_real_session_minutes"].fillna(0.0)
-    metrics["avg_prepare_minutes"] = metrics["avg_prepare_minutes"].fillna(0.0)
+    metrics["median_prepare_minutes"] = metrics["median_prepare_minutes"].fillna(0.0)
     metrics["short_visit_count"] = metrics["short_visit_count"].fillna(0).astype(int)
     return metrics[columns]
 
@@ -310,4 +360,54 @@ def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame)
         "total_sessions_delivered_90": int(org_summary["sessions_delivered_90_days"].sum()),
         "overall_groups_avg_rating": round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0,
         "overall_therapists_avg_rating": round(float(therapists_rated.mean()), 2) if not therapists_rated.empty else 0.0,
+    }
+
+
+def build_activity_usage_table(
+    activity_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Join activity usage counts with catalogue titles.
+
+    Unknown IDs (not in catalogue) use the raw ID string as fallback.
+    Returns a DataFrame sorted by Completions descending.
+
+    Args:
+        activity_usage:    DataFrame with columns: activity_id (str), completion_count (int)
+        activity_catalogue: dict mapping activity_id → title from Squidex
+
+    Returns:
+        DataFrame with columns: Activity Name (str), Completions (int)
+    """
+    if activity_usage.empty:
+        return pd.DataFrame(columns=["Activity Name", "Completions"])
+
+    df = activity_usage.copy()
+    df["Activity Name"] = df["activity_id"].map(activity_catalogue).fillna(df["activity_id"])
+    df = df.rename(columns={"completion_count": "Completions"})
+    return (
+        df[["Activity Name", "Completions"]]
+        .sort_values("Completions", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def activity_catalogue_match_stats(
+    activity_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> dict[str, int]:
+    """Return match counts between Matomo activity IDs and Squidex catalogue IDs."""
+    usage_ids = (
+        set(activity_usage["activity_id"].dropna().astype(str))
+        if "activity_id" in activity_usage.columns
+        else set()
+    )
+    catalogue_ids = {str(key) for key in activity_catalogue.keys()}
+    matched_ids = usage_ids & catalogue_ids
+    return {
+        "usage_ids": len(usage_ids),
+        "catalogue_ids": len(catalogue_ids),
+        "matched_ids": len(matched_ids),
+        "unmatched_ids": len(usage_ids - catalogue_ids),
     }

@@ -61,7 +61,7 @@ def test_real_session_only_sets_real_average() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 25.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -80,7 +80,7 @@ def test_short_visit_only_increments_short_visit_count() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 1
 
 
@@ -99,7 +99,7 @@ def test_prepare_only_visit_sets_prepare_average() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 12.0
+    assert row["median_prepare_minutes"] == 12.0
     assert row["short_visit_count"] == 0
 
 
@@ -118,7 +118,7 @@ def test_mixed_visit_is_classified_as_deliver() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 30.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -129,7 +129,7 @@ def test_user_with_no_visits_gets_zero_duration_metrics() -> None:
 
     row = result.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
 
 
@@ -138,7 +138,7 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
         user_detail = _build_user_detail(_visit_durations([]))
 
         assert user_detail["avg_real_session_minutes"].dtype == "float64"
-        assert user_detail["avg_prepare_minutes"].dtype == "float64"
+        assert user_detail["median_prepare_minutes"].dtype == "float64"
 
         org_summary = merger.build_org_summary(
             user_detail,
@@ -146,14 +146,15 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
             _empty(["bundle_id", "session_id", "user_id"]),
             _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
             pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+            visit_durations=_visit_durations([]),
         )
 
     row = org_summary.iloc[0]
     assert row["avg_real_session_minutes"] == 0.0
-    assert row["avg_prepare_minutes"] == 0.0
+    assert row["median_prepare_minutes"] == 0.0
 
 
-def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
+def test_org_summary_sums_short_visits_and_uses_median_of_user_medians() -> None:
     db_users = pd.DataFrame(
         [
             {
@@ -239,9 +240,289 @@ def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
     )
 
     row = org_summary.iloc[0]
     assert row["short_visit_count"] == 3
     assert row["avg_real_session_minutes"] == 67.5
-    assert row["avg_prepare_minutes"] == 30.0
+    assert row["median_prepare_minutes"] == 30.0
+
+
+def test_prepare_median_not_mean() -> None:
+    """Skewed distribution: median (10) != mean (25) — verifies we use median."""
+    result = _build_user_detail(
+        _visit_durations(
+            [
+                {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": False},
+            ]
+        )
+    )
+
+    row = result.iloc[0]
+    assert row["median_prepare_minutes"] == 10.0  # median, not mean (25.0)
+
+
+def test_org_summary_two_level_median() -> None:
+    """Org-level aggregation uses median of per-user medians."""
+    db_users = pd.DataFrame(
+        [
+            {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+            {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+        ]
+    )
+    user_detail = _build_user_detail(
+        _visit_durations(
+            [
+                # u1: prepare visits 5, 10, 60 min -> median 10.0
+                {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": False},
+                {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": False},
+                # u2: prepare visits 20, 30 min -> median 25.0
+                {"user_id": "u2", "visit_duration_seconds": 20 * 60, "has_deliver_action": False},
+                {"user_id": "u2", "visit_duration_seconds": 30 * 60, "has_deliver_action": False},
+            ]
+        ),
+        db_users=db_users,
+    )
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
+    )
+
+    row = org_summary.iloc[0]
+    # median of user medians: median([10.0, 25.0]) = 17.5
+    assert row["median_prepare_minutes"] == 17.5
+
+def _base_org_setup_for_minmax(visit_rows):
+    """Helper: single-org (Org A) with u1 and u2, returns (user_detail, visit_durations_df)."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations(visit_rows)
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    return user_detail, vd
+
+
+def _org_summary_with_vd(user_detail, vd, user_count=2):
+    return merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": user_count}]),
+        visit_durations=vd,
+    )
+
+
+def test_org_min_max_basic() -> None:
+    """Two users with different session lengths: min/max from raw visits."""
+    user_detail, vd = _base_org_setup_for_minmax([
+        {"user_id": "u1", "visit_duration_seconds": 30 * 60, "has_deliver_action": True},
+        {"user_id": "u1", "visit_duration_seconds": 60 * 60, "has_deliver_action": True},
+        {"user_id": "u2", "visit_duration_seconds": 45 * 60, "has_deliver_action": True},
+    ])
+    row = _org_summary_with_vd(user_detail, vd).iloc[0]
+    assert row["min_real_session_minutes"] == 30.0
+    assert row["max_real_session_minutes"] == 60.0
+
+
+def test_org_min_max_single_session() -> None:
+    """Org has only one real session: min == max."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 25 * 60, "has_deliver_action": True},
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 25.0
+    assert row["max_real_session_minutes"] == 25.0
+
+
+def test_org_min_max_excludes_short_visits() -> None:
+    """Short deliver visits (<= 20 min) must NOT affect min_real_session_minutes."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 10 * 60, "has_deliver_action": True},  # short
+        {"user_id": "u1", "visit_duration_seconds": 40 * 60, "has_deliver_action": True},  # real
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 40.0  # short visit excluded
+    assert row["max_real_session_minutes"] == 40.0
+
+
+def test_org_min_max_no_real_sessions() -> None:
+    """When no real sessions exist, both min and max should be 0.0."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 5 * 60, "has_deliver_action": True},  # short only
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=vd,
+    )
+    row = org_summary.iloc[0]
+    assert row["min_real_session_minutes"] == 0.0
+    assert row["max_real_session_minutes"] == 0.0
+
+
+
+def test_avg_activities_per_session_basic() -> None:
+    """Sum activities_completed across users, divide by sessions_delivered_30_days."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    activity_completions = pd.DataFrame([
+        {"user_id": "u1", "activities_completed": 10},
+        {"user_id": "u2", "activities_completed": 5},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        activity_completions,
+    )
+    sessions_30 = pd.DataFrame([
+        {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+        {"bundle_id": "b1", "session_id": "s3", "user_id": "u2"},
+    ])
+    org_summary = merger.build_org_summary(
+        user_detail,
+        sessions_30,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
+    )
+    row = org_summary.iloc[0]
+    assert row["avg_activities_per_session"] == 5.0  # 15 / 3 = 5.0
+
+
+def test_build_activity_usage_table_known_ids() -> None:
+    """Known IDs get mapped to catalogue titles, sorted descending by completions."""
+    usage = pd.DataFrame({"activity_id": ["abc", "def"], "completion_count": [5, 10]})
+    catalogue = {"abc": "Reality Orientation", "def": "Warm Up"}
+    result = merger.build_activity_usage_table(usage, catalogue)
+    assert list(result["Activity Name"]) == ["Warm Up", "Reality Orientation"]
+    assert list(result["Completions"]) == [10, 5]
+
+
+def test_build_activity_usage_table_unknown_id_fallback() -> None:
+    """Unknown IDs fall back to raw ID string."""
+    usage = pd.DataFrame({"activity_id": ["unknown-xyz"], "completion_count": [3]})
+    result = merger.build_activity_usage_table(usage, {})
+    assert result.iloc[0]["Activity Name"] == "unknown-xyz"
+    assert result.iloc[0]["Completions"] == 3
+
+
+def test_build_activity_usage_table_empty_catalogue() -> None:
+    """Empty catalogue returns raw IDs, no crash."""
+    usage = pd.DataFrame({"activity_id": ["a1", "b2"], "completion_count": [7, 2]})
+    result = merger.build_activity_usage_table(usage, {})
+    assert list(result["Activity Name"]) == ["a1", "b2"]
+    assert list(result["Completions"]) == [7, 2]
+
+
+def test_build_activity_usage_table_empty_usage() -> None:
+    """Empty usage DataFrame returns empty result with correct columns."""
+    empty = pd.DataFrame(columns=["activity_id", "completion_count"])
+    result = merger.build_activity_usage_table(empty, {"x": "Foo"})
+    assert result.empty
+    assert "Activity Name" in result.columns
+    assert "Completions" in result.columns
+
+
+def test_activity_catalogue_match_stats_all_miss() -> None:
+    usage = pd.DataFrame({"activity_id": ["a1", "b2"], "completion_count": [7, 2]})
+    result = merger.activity_catalogue_match_stats(usage, {"c3": "Warm Up"})
+
+    assert result == {
+        "usage_ids": 2,
+        "catalogue_ids": 1,
+        "matched_ids": 0,
+        "unmatched_ids": 2,
+    }
+
+
+def test_activity_catalogue_match_stats_partial_match() -> None:
+    usage = pd.DataFrame({"activity_id": ["a1", "b2", "b2"], "completion_count": [7, 2, 1]})
+    result = merger.activity_catalogue_match_stats(
+        usage,
+        {"a1": "Reality Orientation", "c3": "Warm Up"},
+    )
+
+    assert result == {
+        "usage_ids": 2,
+        "catalogue_ids": 2,
+        "matched_ids": 1,
+        "unmatched_ids": 1,
+    }
+
+
+def test_avg_activities_per_session_zero_sessions_delivered() -> None:
+    """When sessions_delivered_30_days == 0, result must be 0.0 (not NaN or error)."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    activity_completions = pd.DataFrame([
+        {"user_id": "u1", "activities_completed": 8},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        activity_completions,
+    )
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+    row = org_summary.iloc[0]
+    assert row["avg_activities_per_session"] == 0.0
+    assert not pd.isna(row["avg_activities_per_session"])

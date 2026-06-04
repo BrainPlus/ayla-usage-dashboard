@@ -93,6 +93,12 @@ matomo_url = "https://your-matomo-instance/index.php"
 matomo_token = "your_token_here"
 matomo_site_id = "4"
 
+# Squidex — optional, used to resolve activity IDs to titles
+squidex_base_url = "https://cloud.squidex.io/"
+squidex_project = "cst-prepare"  # project containing the session activity schemas
+squidex_client_id = "your_client_id"
+squidex_client_secret = "your_client_secret"
+
 # Database — UK (GCP)
 [uk]
 db_host = "your-uk-host"
@@ -110,7 +116,7 @@ db_user = "your_user"
 db_password = "your_password"
 ```
 
-Matomo credentials are top-level (shared across regions). Database credentials are scoped under `[uk]` and `[eu]` sections. The app reads the correct DB section based on the region selected in the sidebar.
+Matomo and Squidex credentials are top-level (shared across regions). Database credentials are scoped under `[uk]` and `[eu]` sections. The app reads the correct DB section based on the region selected in the sidebar. If Squidex credentials are omitted, activity usage still loads but activity IDs will not be resolved to CMS titles.
 
 The `.streamlit/secrets.toml` file is gitignored and should never be committed.
 

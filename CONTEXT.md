@@ -50,3 +50,11 @@ _Avoid_: Partial session, brief session
 **Activity**:
 A discrete content unit within a CST Session, belonging to one of five slots: intro, warmup, reality orientation (RO), main, or outro. Each activity has a unique ID in Squidex (the CMS) that is locale-specific — the same conceptual activity in different languages carries a different Squidex ID. Tracked in Matomo as `dimension6` (activityId). An activity is considered completed when a therapist navigates forward past it (firing an `Activity Complete` event); this is a known limitation — rapid forward navigation also triggers the event.
 _Avoid_: Step (a sub-unit within an activity), exercise
+
+**Step**:
+A sub-unit within an Activity, containing one or more Talking Points. Therapists navigate between steps using the forward/back controls; completing the last Talking Point in a step fires a `Step Complete` event. Tracked in Matomo as `dimension7` (stepId).
+_Avoid_: Screen, slide
+
+**Talking Point**:
+The finest navigable unit in a delivered CST Session — a single prompt card within a Step. A therapist advancing past a Talking Point fires a `Step Forward Click` event (`category='Activity'`). The time a therapist spends on a Talking Point is approximated as the delta between consecutive `Step Forward Click` events within a Matomo visit.
+_Avoid_: Prompt (informal), card, slide

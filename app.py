@@ -3,6 +3,8 @@
 import streamlit as st
 from datetime import date, timedelta
 
+import pandas as pd
+
 import database
 import matomo
 import merger
@@ -35,6 +37,25 @@ def _cached_sessions_delivered(date_range: str):
 @st.cache_data(ttl=3600)
 def _cached_activity_completions(date_range: str):
     return matomo.get_activity_completions_per_user(date_range)
+
+
+@st.cache_data(ttl=3600)
+def _cached_activity_catalogue() -> dict:
+    import squidex
+    settings = squidex.get_settings_from_secrets(st.secrets)
+    if settings is None:
+        return {}
+    base_url, project, client_id, client_secret = settings
+    try:
+        token = squidex.get_access_token(base_url, client_id, client_secret)
+        return squidex.get_activity_catalogue(base_url, project, token)
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=3600)
+def _cached_activity_usage(date_range: str):
+    return matomo.get_activity_usage_by_id(date_range)
 
 
 @st.cache_data(ttl=3600)
@@ -85,6 +106,8 @@ if pull:
             sessions_30 = _cached_sessions_delivered(date_range_30)
             sessions_90 = _cached_sessions_delivered(date_range_90)
             activity_completions = _cached_activity_completions(date_range_30)
+            activity_catalogue = _cached_activity_catalogue()
+            activity_usage = _cached_activity_usage(date_range_30)
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = sorted(
@@ -118,6 +141,7 @@ if pull:
             )
             org_summary = merger.build_org_summary(
                 user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
+                visit_durations=visit_durations,
             )
             global_summary = merger.build_global_summary(org_summary, bundle_counts)
 
@@ -127,6 +151,8 @@ if pull:
             "global_summary": global_summary,
             "monthly_ratings": monthly_ratings,
             "bundle_counts": bundle_counts,
+            "activity_catalogue": activity_catalogue,
+            "activity_usage": activity_usage,
             "region": region,
             "date_range_30": date_range_30,
             "date_range_90": date_range_90,
@@ -196,6 +222,52 @@ else:
         else:
             st.info("No monthly rating data available.")
 
+        st.divider()
+        st.subheader("Activity Usage (last 30 days)")
+        if "activity_usage" in st.session_state:
+            _activity_usage = st.session_state["activity_usage"]
+            _activity_catalogue = st.session_state.get("activity_catalogue", {})
+            _activity_usage_table = merger.build_activity_usage_table(
+                _activity_usage,
+                _activity_catalogue,
+            )
+            st.dataframe(
+                _activity_usage_table,
+                use_container_width=True,
+                column_config=_column_config_for(
+                    _activity_usage_table,
+                    {
+                        "Activity Name": st.column_config.TextColumn("Activity Name"),
+                        "Completions": st.column_config.NumberColumn("Completions", format="%d"),
+                    },
+                ),
+                hide_index=True,
+            )
+            _activity_catalogue_stats = merger.activity_catalogue_match_stats(
+                _activity_usage,
+                _activity_catalogue,
+            )
+            if _activity_catalogue_stats["usage_ids"] > 0:
+                if _activity_catalogue_stats["catalogue_ids"] == 0:
+                    st.warning(
+                        "Activity titles are not available because the Squidex "
+                        "catalogue returned 0 activities. Check the Squidex secrets."
+                    )
+                elif _activity_catalogue_stats["matched_ids"] == 0:
+                    st.warning(
+                        "Activity titles are not available because none of the "
+                        f"{_activity_catalogue_stats['usage_ids']} Matomo activity IDs "
+                        f"match the {_activity_catalogue_stats['catalogue_ids']} "
+                        "Squidex activity IDs. Check that `squidex_project` points at "
+                        "the same Squidex app/environment used by the tracked app."
+                    )
+                elif _activity_catalogue_stats["unmatched_ids"] > 0:
+                    st.warning(
+                        f"{_activity_catalogue_stats['unmatched_ids']} of "
+                        f"{_activity_catalogue_stats['usage_ids']} Matomo activity IDs "
+                        "could not be resolved to Squidex activity titles."
+                    )
+
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation")
@@ -224,8 +296,16 @@ else:
                     ),
                     format="%.1f",
                 ),
-                "avg_prepare_minutes": st.column_config.NumberColumn(
-                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                "median_prepare_minutes": st.column_config.NumberColumn(
+                    help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                    format="%.1f",
+                ),
+                "min_real_session_minutes": st.column_config.NumberColumn(
+                    help="Shortest individual real session (deliver visit >20 min) for any user in this organisation",
+                    format="%.1f",
+                ),
+                "max_real_session_minutes": st.column_config.NumberColumn(
+                    help="Longest individual real session (deliver visit >20 min) for any user in this organisation",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(
@@ -247,6 +327,14 @@ else:
                         "unique (bundle + session ID) pairs with at least one deliver-mode action. "
                         "Different unit from visit-based duration metrics."
                     ),
+                ),
+                "avg_activities_per_session": st.column_config.NumberColumn(
+                    help=(
+                        "Total Activity Complete events (30-day window) divided by sessions "
+                        "delivered (30-day window). Note: the Activity Complete event fires on "
+                        "forward navigation, so rapid click-through may inflate this count."
+                    ),
+                    format="%.1f",
                 ),
                 "last_login_date": st.column_config.TextColumn(
                     help="Most recent Matomo visit date for any user in this organisation",
@@ -302,8 +390,16 @@ else:
                     ),
                     format="%.1f",
                 ),
-                "avg_prepare_minutes": st.column_config.NumberColumn(
-                    help="Mean duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                "median_prepare_minutes": st.column_config.NumberColumn(
+                    help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
+                    format="%.1f",
+                ),
+                "min_real_session_minutes": st.column_config.NumberColumn(
+                    help="Shortest individual real session (deliver visit >20 min) for any user in this organisation",
+                    format="%.1f",
+                ),
+                "max_real_session_minutes": st.column_config.NumberColumn(
+                    help="Longest individual real session (deliver visit >20 min) for any user in this organisation",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(
@@ -331,6 +427,10 @@ if "user_detail" in st.session_state:
         st.session_state["region"],
         st.session_state["date_range_30"],
         st.session_state["date_range_90"],
+        activity_usage_table=merger.build_activity_usage_table(
+            st.session_state.get("activity_usage", pd.DataFrame()),
+            st.session_state.get("activity_catalogue", {}),
+        ),
     )
     st.download_button(
         label="Download Excel Report",

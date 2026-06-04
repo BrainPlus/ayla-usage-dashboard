@@ -20,8 +20,16 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
             "Average duration in minutes for deliver visits longer than 20 minutes",
         ),
         (
-            "Avg prepare time",
-            "Average duration in minutes for prepare-only visits",
+            "Min real session time",
+            "Shortest individual deliver visit over 20 minutes (minutes) for any user in the organisation",
+        ),
+        (
+            "Max real session time",
+            "Longest individual deliver visit over 20 minutes (minutes) for any user in the organisation",
+        ),
+        (
+            "Median prepare time",
+            "Median duration in minutes for prepare-only visits",
         ),
         (
             "Short visits",
@@ -30,6 +38,11 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
         (
             "Sessions delivered",
             "Unique (bundleId + sessionId) pairs from delivered sessions only (editMode=false)",
+        ),
+        (
+            "Avg activities per session",
+            "Total Activity Complete events divided by sessions delivered (30-day window). "
+            "Note: fires on forward navigation — rapid click-through may inflate this count.",
         ),
         ("Last login date", "Most recent recorded Matomo visit date"),
         (
@@ -55,6 +68,7 @@ def build_excel_report(
     region: str,
     date_range_30: str,
     date_range_90: str,
+    activity_usage_table: pd.DataFrame | None = None,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
@@ -63,27 +77,33 @@ def build_excel_report(
         1. Organisation Summary
         2. User Detail
         3. Monthly Ratings
-        4. Methodology
+        4. Activity Usage
+        5. Methodology
 
     All columns are auto-sized up to a maximum width of 50 characters.
 
     Args:
-        user_detail:     output of merger.build_user_detail
-        org_summary:     output of merger.build_org_summary
-        monthly_ratings: output of database.get_monthly_star_ratings
-        region:          "uk" or "eu"
-        date_range_30:   "YYYY-MM-DD,YYYY-MM-DD" for the 30-day window
-        date_range_90:   "YYYY-MM-DD,YYYY-MM-DD" for the 90-day window
+        user_detail:           output of merger.build_user_detail
+        org_summary:           output of merger.build_org_summary
+        monthly_ratings:       output of database.get_monthly_star_ratings
+        region:                "uk" or "eu"
+        date_range_30:         "YYYY-MM-DD,YYYY-MM-DD" for the 30-day window
+        date_range_90:         "YYYY-MM-DD,YYYY-MM-DD" for the 90-day window
+        activity_usage_table:  output of merger.build_activity_usage_table (optional)
 
     Returns:
         bytes of the .xlsx file
     """
+    if activity_usage_table is None:
+        activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
+
     methodology = build_methodology_df(region, date_range_30, date_range_90)
 
     sheets = [
         ("Organisation Summary", org_summary),
         ("User Detail", user_detail),
         ("Monthly Ratings", monthly_ratings),
+        ("Activity Usage", activity_usage_table),
         ("Methodology", methodology),
     ]
 
