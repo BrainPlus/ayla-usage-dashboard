@@ -28,8 +28,8 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
             "Longest individual deliver visit over 20 minutes (minutes) for any user in the organisation",
         ),
         (
-            "Avg prepare time",
-            "Average duration in minutes for prepare-only visits",
+            "Median prepare time",
+            "Median duration in minutes for prepare-only visits",
         ),
         (
             "Short visits",
