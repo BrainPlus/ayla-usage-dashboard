@@ -330,7 +330,7 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
 def build_global_summary(
     org_summary: pd.DataFrame,
     bundle_counts: pd.DataFrame,
-    star_ratings: pd.DataFrame,
+    star_ratings: pd.DataFrame | None = None,
 ) -> dict:
     """
     Computes scalar totals for the Global Overview tab.
@@ -338,8 +338,8 @@ def build_global_summary(
     Args:
         org_summary:    output of build_org_summary
         bundle_counts:  organisation_name, total_groups  (from database.get_bundle_counts_per_org)
-        star_ratings:   organisation_name, target, avg_rating, total_responses
-                        (from database.get_star_ratings_by_org)
+        star_ratings:   optional organisation_name, target, avg_rating,
+                        total_responses (from database.get_star_ratings_by_org)
 
     Returns:
         dict with keys:
@@ -354,14 +354,29 @@ def build_global_summary(
     # Exclude "Unassigned" from org count — not a real organisation
     real_orgs = org_summary[org_summary["organisation_name"] != _NO_ORG]
 
+    if star_ratings is not None:
+        groups_average = _weighted_rating_average(star_ratings, "groups")
+        therapists_average = _weighted_rating_average(star_ratings, "therapists")
+    else:
+        groups_rated = org_summary[org_summary["groups_avg_rating"] > 0]["groups_avg_rating"]
+        therapists_rated = org_summary[org_summary["therapists_avg_rating"] > 0]["therapists_avg_rating"]
+        groups_average = (
+            round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0
+        )
+        therapists_average = (
+            round(float(therapists_rated.mean()), 2)
+            if not therapists_rated.empty
+            else 0.0
+        )
+
     return {
         "total_organisations": int(len(real_orgs)),
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
         "total_sessions_delivered_30": int(org_summary["sessions_delivered_30_days"].sum()),
         "total_sessions_delivered_90": int(org_summary["sessions_delivered_90_days"].sum()),
-        "overall_groups_avg_rating": _weighted_rating_average(star_ratings, "groups"),
-        "overall_therapists_avg_rating": _weighted_rating_average(star_ratings, "therapists"),
+        "overall_groups_avg_rating": groups_average,
+        "overall_therapists_avg_rating": therapists_average,
     }
 
 

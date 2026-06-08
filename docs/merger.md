@@ -111,14 +111,14 @@ Sorted descending by `Completions` (most used first).
 
 ---
 
-### build_global_summary(org_summary, bundle_counts, star_ratings)
+### build_global_summary(org_summary, bundle_counts, star_ratings=None)
 
 **Purpose:** Computes top-level scalar totals for the Global Overview tab.
 
 **Parameters:**
 - `org_summary` *(DataFrame)* — output of `build_org_summary`
 - `bundle_counts` *(DataFrame)* — `organisation_name`, `total_groups` from `database.get_bundle_counts_per_org`
-- `star_ratings` *(DataFrame)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
+- `star_ratings` *(DataFrame, optional)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
 
 **Returns:** `dict` with keys:
 - `total_organisations` (int) — excludes `"Unassigned / No organisation"`

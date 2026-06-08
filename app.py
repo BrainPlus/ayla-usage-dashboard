@@ -1,7 +1,6 @@
 # Streamlit entry point: sidebar region selector, three-tab layout (Global Overview, By Organisation, By User).
 
 import importlib
-import inspect
 import streamlit as st
 from datetime import date, timedelta
 
@@ -30,25 +29,64 @@ def _get_activity_usage_by_id(date_range: str):
     return matomo.get_activity_usage_by_id(date_range)
 
 
-def _current_merger():
-    global merger
-    global_summary_params = inspect.signature(merger.build_global_summary).parameters
-    if (
-        "star_ratings" not in global_summary_params
-        or not hasattr(merger, "build_monthly_rating_summary")
-    ):
-        merger = importlib.reload(merger)
-    return merger
-
-
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
-    return _current_merger().build_global_summary(
-        org_summary, bundle_counts, star_ratings
+    summary = merger.build_global_summary(org_summary, bundle_counts)
+    summary["overall_groups_avg_rating"] = _weighted_rating_average(
+        star_ratings, "groups"
     )
+    summary["overall_therapists_avg_rating"] = _weighted_rating_average(
+        star_ratings, "therapists"
+    )
+    return summary
 
 
 def _build_monthly_rating_summary(monthly_ratings):
-    return _current_merger().build_monthly_rating_summary(monthly_ratings)
+    columns = ["month", "target", "avg_rating"]
+    if monthly_ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings = monthly_ratings.copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["avg_rating"].notna() & (ratings["total_responses"] > 0)
+    ].copy()
+    if ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings["rating_total"] = ratings["avg_rating"] * ratings["total_responses"]
+    summary = (
+        ratings.groupby(["month", "target"], as_index=False)
+        .agg(
+            rating_total=("rating_total", "sum"),
+            total_responses=("total_responses", "sum"),
+        )
+    )
+    summary["avg_rating"] = (
+        summary["rating_total"] / summary["total_responses"]
+    ).round(2)
+    return summary[columns]
+
+
+def _weighted_rating_average(star_ratings, target):
+    if star_ratings.empty:
+        return 0.0
+
+    ratings = star_ratings[star_ratings["target"] == target].copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["avg_rating"].notna() & (ratings["total_responses"] > 0)
+    ]
+    if ratings.empty:
+        return 0.0
+
+    weighted_total = (ratings["avg_rating"] * ratings["total_responses"]).sum()
+    return round(float(weighted_total / ratings["total_responses"].sum()), 2)
 
 
 # ── cached Matomo wrappers ────────────────────────────────────────────────────

@@ -56,25 +56,28 @@ def test_cached_activity_usage_reloads_stale_matomo_module(monkeypatch) -> None:
     assert app.matomo is fresh_matomo
 
 
-def test_global_summary_reloads_stale_merger_module(monkeypatch) -> None:
+def test_global_summary_supports_stale_two_argument_merger_module(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
     sys.modules.pop("app", None)
 
     app = importlib.import_module("app")
     stale_merger = ModuleType("merger")
-    stale_merger.build_global_summary = lambda org_summary, bundle_counts: None
-    fresh_merger = ModuleType("merger")
-    fresh_merger.build_global_summary = (
-        lambda org_summary, bundle_counts, star_ratings: {
-            "star_ratings": star_ratings,
+    stale_merger.build_global_summary = (
+        lambda org_summary, bundle_counts: {
+            "overall_groups_avg_rating": 3.0,
+            "overall_therapists_avg_rating": 3.0,
         }
     )
-    fresh_merger.build_monthly_rating_summary = lambda monthly_ratings: monthly_ratings
-
     monkeypatch.setattr(app, "merger", stale_merger)
-    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
 
-    result = app._build_global_summary("orgs", "bundles", "ratings")
+    ratings = app.pd.DataFrame(
+        [
+            {"target": "groups", "avg_rating": 1.0, "total_responses": 1},
+            {"target": "groups", "avg_rating": 5.0, "total_responses": 9},
+            {"target": "therapists", "avg_rating": 4.0, "total_responses": 2},
+        ]
+    )
+    result = app._build_global_summary("orgs", "bundles", ratings)
 
-    assert result == {"star_ratings": "ratings"}
-    assert app.merger is fresh_merger
+    assert result["overall_groups_avg_rating"] == 4.6
+    assert result["overall_therapists_avg_rating"] == 4.0
