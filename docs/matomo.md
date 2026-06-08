@@ -4,6 +4,20 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 ---
 
+### _fetch_all_live_visits(base_params, page_size=5000) *(private)*
+
+**Purpose:** Paginates through `Live.getLastVisitsDetails` using `filter_offset`, returning all visits in the date range regardless of total count.
+
+**Parameters:**
+- `base_params` *(dict)* — Matomo API parameters (without `filter_limit` or `filter_offset`; those are added per page).
+- `page_size` *(int, default 5000)* — visits to request per page.
+
+**Returns:** `list` of visit dicts (all pages concatenated). Raises `RuntimeError` if any page returns a non-list, preventing API errors or partial results from being reported as empty data.
+
+**Notes:** Replaces the previous single-call approach with `filter_limit=10000`, which silently discarded visits beyond that threshold for large deployments. All four `Live.getLastVisitsDetails`-based functions (`get_visit_durations`, `get_sessions_delivered`, `get_activity_completions_per_user`, `get_activity_usage_by_id`) call this helper.
+
+---
+
 ### matomo_get(params, expect_csv=False)
 
 **Purpose:** Low-level helper that merges base params (`module`, `idSite`, `token_auth`) with the caller's params and makes a GET request to the Matomo API.

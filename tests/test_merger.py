@@ -380,6 +380,57 @@ def test_org_min_max_excludes_short_visits() -> None:
     assert row["max_real_session_minutes"] == 40.0
 
 
+def test_org_avg_is_visit_weighted_when_raw_visits_provided() -> None:
+    """When raw visit_durations are passed, org avg is weighted by visit count (not user count)."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    # u1: 1 real session of 30 min, u2: 10 real sessions of 60 min each
+    visit_rows = [
+        {"user_id": "u1", "visit_duration_seconds": 30 * 60, "has_deliver_action": True},
+    ] + [
+        {"user_id": "u2", "visit_duration_seconds": 60 * 60, "has_deliver_action": True}
+    ] * 10
+    vd = _visit_durations(visit_rows)
+    user_detail = _build_user_detail(vd, db_users=db_users)
+    row = _org_summary_with_vd(user_detail, vd).iloc[0]
+
+    # Visit-weighted: (30 + 10*60) / 11 = 57.3 min
+    expected = round((30 + 10 * 60) / 11, 1)
+    assert row["avg_real_session_minutes"] == expected
+    # Confirm it is NOT the unweighted mean-of-means (45.0)
+    assert row["avg_real_session_minutes"] != 45.0
+
+
+def test_org_avg_falls_back_to_user_detail_when_visit_durations_absent() -> None:
+    """When visit_durations is empty, org avg falls back to the mean of per-user averages."""
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
+    ])
+    vd = _visit_durations([
+        {"user_id": "u1", "visit_duration_seconds": 30 * 60, "has_deliver_action": True},
+        {"user_id": "u2", "visit_duration_seconds": 60 * 60, "has_deliver_action": True},
+    ])
+    user_detail = _build_user_detail(vd, db_users=db_users)
+
+    # build_org_summary called with EMPTY visit_durations — must use user_detail fallback
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
+        visit_durations=_visit_durations([]),
+    )
+
+    row = org_summary.iloc[0]
+    assert row["avg_real_session_minutes"] == 45.0  # mean of [30.0, 60.0]
+    assert row["min_real_session_minutes"] == 0.0   # cannot derive without raw visits
+    assert row["max_real_session_minutes"] == 0.0
+
+
 def test_org_min_max_no_real_sessions() -> None:
     """When no real sessions exist, both min and max should be 0.0."""
     db_users = pd.DataFrame([

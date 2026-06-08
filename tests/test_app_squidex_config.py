@@ -17,6 +17,7 @@ def _streamlit_stub() -> ModuleType:
     stub.session_state = {}
     stub.sidebar = _Context()
     stub.cache_data = lambda **kwargs: (lambda f: f)
+    stub.cache_resource = lambda f: f  # passthrough for @st.cache_resource (no-arg form)
     stub.set_page_config = lambda **kwargs: None
     stub.title = lambda *args, **kwargs: None
     stub.selectbox = lambda label, options, **kwargs: options[0]

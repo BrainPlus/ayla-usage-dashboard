@@ -54,11 +54,11 @@ Two sentinel constants are used throughout:
 - `active_users_30` (int) — users with 2+ logins in the 30-day window
 - `logins_30_days` (int)
 - `logins_90_days` (int)
-- `avg_real_session_minutes` (float, 1 decimal) — mean of per-user averages, excluding users with 0
+- `avg_real_session_minutes` (float, 1 decimal) — when raw `visit_durations` are provided: visit-count-weighted mean across all deliver visits >20 min in the org; falls back to mean of per-user averages when `visit_durations` is absent
 - `median_prepare_minutes` (float, 1 decimal) — median of per-user medians, excluding users with 0
-- `min_real_session_minutes` (float, 1 decimal) — shortest individual real session (raw visit >20 min) across all users in the org
-- `max_real_session_minutes` (float, 1 decimal) — longest individual real session across all users in the org
-- `short_visit_count` (int)
+- `min_real_session_minutes` (float, 1 decimal) — shortest individual real session (raw visit >20 min) across all users in the org; 0.0 when `visit_durations` is absent
+- `max_real_session_minutes` (float, 1 decimal) — longest individual real session across all users in the org; 0.0 when `visit_durations` is absent
+- `short_visit_count` (int) — deliver visits ≤20 min across all users in the org
 - `sessions_delivered_30_days` (int)
 - `sessions_delivered_90_days` (int)
 - `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `sessions_delivered_30_days`; 0.0 if no sessions
@@ -67,7 +67,7 @@ Two sentinel constants are used throughout:
 - `therapists_avg_rating` (float, 2 decimal) — 0.0 if no data
 
 **Notes:**
-- **Min/max session time:** computed from raw `visit_durations` (not per-user averages) to preserve individual outliers. Joined to org via `user_detail[user_id → organisation_name]`. See ADR-0004.
+- **Avg/min/max session time:** all three are computed from raw `visit_durations` when available, so `avg` is visit-count-weighted rather than a mean of per-user averages. Joined to org via `user_detail[user_id → organisation_name]`. See ADR-0004.
 - **Median prepare time:** median is used (not mean) because prepare visits are skewed by occasional long sessions. See ADR-0003.
 - **Sessions delivered:** deduplicated on `(organisation_name, bundle_id, session_id)` — a session delivered by two users in the same org counts once.
 - **Star ratings:** pivoted from long to wide; both columns guaranteed to exist even if one target has no data.

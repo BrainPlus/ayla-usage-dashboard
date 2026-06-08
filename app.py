@@ -1,6 +1,7 @@
 # Streamlit entry point: sidebar region selector, three-tab layout (Global Overview, By Organisation, By User).
 
 import importlib
+import inspect
 import streamlit as st
 from datetime import date, timedelta
 
@@ -24,7 +25,13 @@ def _column_config_for(dataframe, column_config):
     }
 
 
+# ── deploy-compatibility helpers ──────────────────────────────────────────────
+# These wrappers guard against Streamlit's module-caching during hot deploys.
+# Stale cached module objects may lack new functions or accept fewer arguments.
+# Commits 18d5df5, c814074, 44be948 document when each guard was needed.
+
 def _get_activity_usage_by_id(date_range: str):
+    # commit 18d5df5: reload matomo if the function was added after the cached import
     global matomo
     if not hasattr(matomo, "get_activity_usage_by_id"):
         matomo = importlib.reload(matomo)
@@ -32,17 +39,22 @@ def _get_activity_usage_by_id(date_range: str):
 
 
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
-    summary = merger.build_global_summary(org_summary, bundle_counts)
-    summary["overall_groups_avg_rating"] = _weighted_rating_average(
-        star_ratings, "groups"
-    )
-    summary["overall_therapists_avg_rating"] = _weighted_rating_average(
-        star_ratings, "therapists"
-    )
+    # commit c814074: stale merger may only accept 2 args — check signature before calling
+    # so unrelated TypeErrors inside build_global_summary are not silently swallowed.
+    sig = inspect.signature(merger.build_global_summary)
+    if len(sig.parameters) >= 3:
+        summary = merger.build_global_summary(org_summary, bundle_counts, star_ratings)
+    else:
+        summary = merger.build_global_summary(org_summary, bundle_counts)
+    # Always recompute response-weighted ratings here so a stale merger cannot
+    # return wrong values (commit 44be948).
+    summary["overall_groups_avg_rating"] = _weighted_rating_average(star_ratings, "groups")
+    summary["overall_therapists_avg_rating"] = _weighted_rating_average(star_ratings, "therapists")
     return summary
 
 
 def _build_monthly_rating_summary(monthly_ratings):
+    # commit 44be948: local copy so the chart renders even when merger is stale
     columns = ["month", "target", "avg_rating"]
     if monthly_ratings.empty:
         return pd.DataFrame(columns=columns)
@@ -478,14 +490,6 @@ else:
                 ),
                 "median_prepare_minutes": st.column_config.NumberColumn(
                     help="Median duration (minutes) of prepare-only visits (no deliver-mode actions)",
-                    format="%.1f",
-                ),
-                "min_real_session_minutes": st.column_config.NumberColumn(
-                    help="Shortest individual real session (deliver visit >20 min) for any user in this organisation",
-                    format="%.1f",
-                ),
-                "max_real_session_minutes": st.column_config.NumberColumn(
-                    help="Longest individual real session (deliver visit >20 min) for any user in this organisation",
                     format="%.1f",
                 ),
                 "short_visit_count": st.column_config.NumberColumn(
