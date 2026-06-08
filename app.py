@@ -1,6 +1,7 @@
 # Streamlit entry point: sidebar region selector, three-tab layout (Global Overview, By Organisation, By User).
 
 import importlib
+import inspect
 import streamlit as st
 from datetime import date, timedelta
 
@@ -27,6 +28,27 @@ def _get_activity_usage_by_id(date_range: str):
     if not hasattr(matomo, "get_activity_usage_by_id"):
         matomo = importlib.reload(matomo)
     return matomo.get_activity_usage_by_id(date_range)
+
+
+def _current_merger():
+    global merger
+    global_summary_params = inspect.signature(merger.build_global_summary).parameters
+    if (
+        "star_ratings" not in global_summary_params
+        or not hasattr(merger, "build_monthly_rating_summary")
+    ):
+        merger = importlib.reload(merger)
+    return merger
+
+
+def _build_global_summary(org_summary, bundle_counts, star_ratings):
+    return _current_merger().build_global_summary(
+        org_summary, bundle_counts, star_ratings
+    )
+
+
+def _build_monthly_rating_summary(monthly_ratings):
+    return _current_merger().build_monthly_rating_summary(monthly_ratings)
 
 
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
@@ -151,7 +173,7 @@ if pull:
                 user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
-            global_summary = merger.build_global_summary(
+            global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
             )
 
@@ -217,7 +239,7 @@ else:
         st.markdown("**Monthly Average Star Ratings**")
         if not monthly_ratings.empty:
             monthly_pivot = (
-                merger.build_monthly_rating_summary(monthly_ratings)
+                _build_monthly_rating_summary(monthly_ratings)
                 .pivot(index="month", columns="target", values="avg_rating")
             )
             monthly_pivot.columns.name = None

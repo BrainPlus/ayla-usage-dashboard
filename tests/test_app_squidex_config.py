@@ -54,3 +54,27 @@ def test_cached_activity_usage_reloads_stale_matomo_module(monkeypatch) -> None:
         "usage:2026-01-01,2026-01-31"
     )
     assert app.matomo is fresh_matomo
+
+
+def test_global_summary_reloads_stale_merger_module(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
+    sys.modules.pop("app", None)
+
+    app = importlib.import_module("app")
+    stale_merger = ModuleType("merger")
+    stale_merger.build_global_summary = lambda org_summary, bundle_counts: None
+    fresh_merger = ModuleType("merger")
+    fresh_merger.build_global_summary = (
+        lambda org_summary, bundle_counts, star_ratings: {
+            "star_ratings": star_ratings,
+        }
+    )
+    fresh_merger.build_monthly_rating_summary = lambda monthly_ratings: monthly_ratings
+
+    monkeypatch.setattr(app, "merger", stale_merger)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
+
+    result = app._build_global_summary("orgs", "bundles", "ratings")
+
+    assert result == {"star_ratings": "ratings"}
+    assert app.merger is fresh_merger
