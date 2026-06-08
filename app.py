@@ -11,6 +11,8 @@ import matomo
 import merger
 import exporter
 
+APP_REVISION = "2026-06-08-global-summary-compat-v2"
+
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
 
@@ -150,6 +152,7 @@ with st.sidebar:
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Pulling last login data may take a few minutes")
+    st.caption(f"Deployment revision: {APP_REVISION}")
 
 date_range_30 = f"{start_30},{end_30}"
 date_range_90 = f"{start_90},{end_90}"
@@ -231,7 +234,7 @@ if pull:
         st.success("Data loaded successfully.")
 
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"Error fetching data [{APP_REVISION}]: {e}")
 
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
