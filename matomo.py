@@ -2,6 +2,7 @@
 # ALWAYS include segment=customDimension10==false for session/activity/step event queries.
 
 import io
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -32,6 +33,26 @@ def matomo_get(params: dict, expect_csv: bool = False):
     if expect_csv:
         return response.text
     return response.json()
+
+
+def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
+    """Paginate Live.getLastVisitsDetails until all visits in the date range are fetched."""
+    all_visits: list = []
+    offset = 0
+    while True:
+        data = matomo_get({**base_params, "filter_limit": page_size, "filter_offset": offset})
+        if not isinstance(data, list):
+            raise RuntimeError(
+                f"Matomo returned a non-list response (type {type(data).__name__!r}) "
+                f"at offset {offset}."
+            )
+        if not data:
+            break  # empty page → all pages consumed
+        all_visits.extend(data)
+        if len(data) < page_size:
+            break  # partial page → last page
+        offset += len(data)
+    return all_visits
 
 
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
@@ -131,16 +152,15 @@ def get_visit_durations(date_range: str) -> pd.DataFrame:
             user_id (str), visit_duration_seconds (float), has_deliver_action (bool)
     """
     columns = ["user_id", "visit_duration_seconds", "has_deliver_action"]
-    data = matomo_get(
+    data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "filter_limit": 10000,
         }
     )
 
-    if not isinstance(data, list):
+    if not data:
         return pd.DataFrame(columns=columns)
 
     records = []
@@ -183,16 +203,15 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
         DataFrame with columns: bundle_id (str), session_id (str), user_id (str)
         Deduplicate on (bundle_id, session_id, user_id) before counting.
     """
-    data = matomo_get(
+    data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "filter_limit": 10000,
         }
     )
 
-    if not isinstance(data, list):
+    if not data:
         return pd.DataFrame(columns=["bundle_id", "session_id", "user_id"])
 
     records = []
@@ -225,16 +244,15 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
     Returns:
         DataFrame with columns: user_id (str), activities_completed (int)
     """
-    data = matomo_get(
+    data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "filter_limit": 10000,
         }
     )
 
-    if not isinstance(data, list):
+    if not data:
         return pd.DataFrame(columns=["user_id", "activities_completed"])
 
     counts: dict[str, int] = {}
@@ -272,16 +290,15 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
         DataFrame with columns: activity_id (str), language (str), completion_count (int)
     """
     empty = pd.DataFrame(columns=["activity_id", "language", "completion_count"])
-    data = matomo_get(
+    data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "filter_limit": 10000,
         }
     )
 
-    if not isinstance(data, list):
+    if not data:
         return empty
 
     counts: dict[tuple[str, str], int] = {}
@@ -355,8 +372,6 @@ def _extract_dimension(obj: dict, dim_number: str) -> str:
 
 
 if __name__ == "__main__":
-    from datetime import date, timedelta
-
     today = date.today()
     week_ago = today - timedelta(days=7)
     date_range = f"{week_ago},{today}"

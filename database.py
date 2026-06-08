@@ -6,9 +6,11 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 
+@st.cache_resource
 def get_engine(region: str):
     """
     Returns a SQLAlchemy engine for the given region using st.secrets[region].
+    Cached as a shared resource so only one connection pool exists per region.
 
     Args:
         region: "uk" or "eu"
@@ -113,17 +115,17 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
     """
     sql = text("""
         SELECT
-            o.name                              AS organisation_name,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
-            AVG((ans->>'answer')::numeric)      AS avg_rating,
-            COUNT(*)                            AS total_responses
+            AVG((ans->>'answer')::numeric)                   AS avg_rating,
+            COUNT(*)                                         AS total_responses
         FROM feedback_answers fa
         CROSS JOIN LATERAL jsonb_array_elements(fa.answers->'answers') AS ans
-        JOIN users u          ON u.id  = fa.user_id
-        JOIN organisations o  ON o.id  = u.organisation_id
+        JOIN users u           ON u.id  = fa.user_id
+        LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
-        GROUP BY o.name, fq.target
-        ORDER BY o.name
+        GROUP BY COALESCE(o.name, 'Unassigned / No organisation'), fq.target
+        ORDER BY COALESCE(o.name, 'Unassigned / No organisation')
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
@@ -145,18 +147,18 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
     """
     sql = text("""
         SELECT
-            TO_CHAR(fa.created_at, 'YYYY-MM')   AS month,
-            o.name                               AS organisation_name,
+            TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
-            AVG((ans->>'answer')::numeric)       AS avg_rating,
-            COUNT(*)                             AS total_responses
+            AVG((ans->>'answer')::numeric)                   AS avg_rating,
+            COUNT(*)                                         AS total_responses
         FROM feedback_answers fa
         CROSS JOIN LATERAL jsonb_array_elements(fa.answers->'answers') AS ans
         JOIN users u           ON u.id  = fa.user_id
-        JOIN organisations o   ON o.id  = u.organisation_id
+        LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
-        GROUP BY month, o.name, fq.target
-        ORDER BY month, o.name
+        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'), fq.target
+        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation')
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)

@@ -124,13 +124,11 @@ def build_org_summary(
     agg = user_detail.groupby("organisation_name").agg(
         logins_30_days=("logins_30_days", "sum"),
         logins_90_days=("logins_90_days", "sum"),
-        avg_real_session_minutes=("avg_real_session_minutes", lambda s: s[s > 0].mean()),
         median_prepare_minutes=("median_prepare_minutes", lambda s: s[s > 0].median()),
         short_visit_count=("short_visit_count", "sum"),
         active_users_30=("logins_30_days", lambda s: (s >= 2).sum()),
     ).reset_index()
 
-    agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].round(1)
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].round(1)
     agg = agg.merge(last_login_by_org, on="organisation_name", how="left")
     agg["last_login_date"] = agg["last_login_date"].fillna(_NO_USAGE)
@@ -206,7 +204,6 @@ def build_org_summary(
         "sessions_delivered_30_days", "sessions_delivered_90_days",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
-    agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].fillna(0.0)
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
@@ -217,7 +214,9 @@ def build_org_summary(
     )
     agg = agg.drop(columns=["total_activities_completed"])
 
-    # --- org-level min/max real session duration from raw visits ---
+    # --- org-level avg/min/max real session duration from raw visits ---
+    # Computed directly from individual visit durations (not from per-user averages)
+    # so the org mean is properly visit-count-weighted.
     if visit_durations is not None and not visit_durations.empty:
         vd = visit_durations.copy()
         vd["user_id"] = vd["user_id"].astype(str)
@@ -229,20 +228,36 @@ def build_org_summary(
                 user_detail[["user_id", "organisation_name"]].drop_duplicates(),
                 on="user_id", how="left",
             )
-            minmax = (
+            real_stats = (
                 real_vd.groupby("organisation_name")["visit_duration_seconds"]
-                .agg(min_real_session_minutes="min", max_real_session_minutes="max")
+                .agg(
+                    avg_real_session_minutes="mean",
+                    min_real_session_minutes="min",
+                    max_real_session_minutes="max",
+                )
                 .reset_index()
             )
-            minmax["min_real_session_minutes"] = (minmax["min_real_session_minutes"] / 60).round(1)
-            minmax["max_real_session_minutes"] = (minmax["max_real_session_minutes"] / 60).round(1)
-            agg = agg.merge(minmax, on="organisation_name", how="left")
+            real_stats["avg_real_session_minutes"] = (real_stats["avg_real_session_minutes"] / 60).round(1)
+            real_stats["min_real_session_minutes"] = (real_stats["min_real_session_minutes"] / 60).round(1)
+            real_stats["max_real_session_minutes"] = (real_stats["max_real_session_minutes"] / 60).round(1)
+            agg = agg.merge(real_stats, on="organisation_name", how="left")
         else:
+            agg["avg_real_session_minutes"] = 0.0
             agg["min_real_session_minutes"] = 0.0
             agg["max_real_session_minutes"] = 0.0
     else:
+        # No raw visit data: fall back to mean of per-user averages from user_detail.
+        # min/max require individual visit durations and cannot be derived here.
+        avg_fallback = (
+            user_detail.groupby("organisation_name")["avg_real_session_minutes"]
+            .apply(lambda s: s[s > 0].mean())
+            .round(1)
+            .reset_index(name="avg_real_session_minutes")
+        )
+        agg = agg.merge(avg_fallback, on="organisation_name", how="left")
         agg["min_real_session_minutes"] = 0.0
         agg["max_real_session_minutes"] = 0.0
+    agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].fillna(0.0)
     agg["min_real_session_minutes"] = agg["min_real_session_minutes"].fillna(0.0)
     agg["max_real_session_minutes"] = agg["max_real_session_minutes"].fillna(0.0)
 
