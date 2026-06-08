@@ -111,13 +111,14 @@ Sorted descending by `Completions` (most used first).
 
 ---
 
-### build_global_summary(org_summary, bundle_counts)
+### build_global_summary(org_summary, bundle_counts, star_ratings)
 
 **Purpose:** Computes top-level scalar totals for the Global Overview tab.
 
 **Parameters:**
 - `org_summary` *(DataFrame)* — output of `build_org_summary`
 - `bundle_counts` *(DataFrame)* — `organisation_name`, `total_groups` from `database.get_bundle_counts_per_org`
+- `star_ratings` *(DataFrame)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
 
 **Returns:** `dict` with keys:
 - `total_organisations` (int) — excludes `"Unassigned / No organisation"`
@@ -125,7 +126,21 @@ Sorted descending by `Completions` (most used first).
 - `total_groups_created` (int) — sum from `bundle_counts`
 - `total_sessions_delivered_30` (int)
 - `total_sessions_delivered_90` (int)
-- `overall_groups_avg_rating` (float, 2 decimal) — mean across orgs with a non-zero rating
+- `overall_groups_avg_rating` (float, 2 decimal) — response-weighted mean across all organisations
 - `overall_therapists_avg_rating` (float, 2 decimal) — same
 
-**Notes:** Rating averages exclude orgs with a 0.0 rating to avoid depressing the mean with no-data entries.
+**Notes:** Rating averages are weighted by `total_responses`, so every submitted rating contributes equally regardless of organisation size.
+
+---
+
+### build_monthly_rating_summary(monthly_ratings)
+
+**Purpose:** Computes response-weighted monthly ratings across all organisations.
+
+**Parameters:**
+- `monthly_ratings` *(DataFrame)* — `month`, `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_monthly_star_ratings`
+
+**Returns:** DataFrame with columns:
+- `month` (str)
+- `target` (str)
+- `avg_rating` (float, 2 decimal)

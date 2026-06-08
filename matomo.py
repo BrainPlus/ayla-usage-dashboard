@@ -168,9 +168,10 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
-    Real delivered-session filter: only visits longer than 20 minutes are
-    eligible, and only actions where dimension10 == "false" are included;
-    dimension10 == "true" (prepare/edit mode) actions are skipped.
+    All unique CST sessions with actions where dimension10 == "false" are
+    included; dimension10 == "true" (prepare/edit mode) actions are skipped.
+    Visit duration does not affect this count. The 20-minute threshold applies
+    only to visit-duration metrics.
 
     bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
     session_id comes from dimension5.

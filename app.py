@@ -151,7 +151,9 @@ if pull:
                 user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
-            global_summary = merger.build_global_summary(org_summary, bundle_counts)
+            global_summary = merger.build_global_summary(
+                org_summary, bundle_counts, star_ratings
+            )
 
         st.session_state.update({
             "user_detail": user_detail,
@@ -215,10 +217,7 @@ else:
         st.markdown("**Monthly Average Star Ratings**")
         if not monthly_ratings.empty:
             monthly_pivot = (
-                monthly_ratings
-                .groupby(["month", "target"])["avg_rating"]
-                .mean()
-                .reset_index()
+                merger.build_monthly_rating_summary(monthly_ratings)
                 .pivot(index="month", columns="target", values="avg_rating")
             )
             monthly_pivot.columns.name = None

@@ -573,3 +573,86 @@ def test_avg_activities_per_session_zero_sessions_delivered() -> None:
     row = org_summary.iloc[0]
     assert row["avg_activities_per_session"] == 0.0
     assert not pd.isna(row["avg_activities_per_session"])
+
+
+def test_global_summary_weights_ratings_by_response_count() -> None:
+    org_summary = pd.DataFrame(
+        [
+            {
+                "organisation_name": "Org A",
+                "total_users": 1,
+                "sessions_delivered_30_days": 2,
+                "sessions_delivered_90_days": 3,
+            },
+            {
+                "organisation_name": "Org B",
+                "total_users": 1,
+                "sessions_delivered_30_days": 4,
+                "sessions_delivered_90_days": 5,
+            },
+        ]
+    )
+    star_ratings = pd.DataFrame(
+        [
+            {
+                "organisation_name": "Org A",
+                "target": "groups",
+                "avg_rating": 1.0,
+                "total_responses": 1,
+            },
+            {
+                "organisation_name": "Org B",
+                "target": "groups",
+                "avg_rating": 5.0,
+                "total_responses": 9,
+            },
+            {
+                "organisation_name": "Org A",
+                "target": "therapists",
+                "avg_rating": 2.0,
+                "total_responses": 3,
+            },
+            {
+                "organisation_name": "Org B",
+                "target": "therapists",
+                "avg_rating": 4.0,
+                "total_responses": 1,
+            },
+        ]
+    )
+
+    result = merger.build_global_summary(
+        org_summary,
+        pd.DataFrame([{"organisation_name": "Org A", "total_groups": 2}]),
+        star_ratings,
+    )
+
+    assert result["overall_groups_avg_rating"] == 4.6
+    assert result["overall_therapists_avg_rating"] == 2.5
+
+
+def test_build_monthly_rating_summary_weights_ratings_by_response_count() -> None:
+    monthly_ratings = pd.DataFrame(
+        [
+            {
+                "month": "2026-05",
+                "organisation_name": "Org A",
+                "target": "groups",
+                "avg_rating": 1.0,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "organisation_name": "Org B",
+                "target": "groups",
+                "avg_rating": 5.0,
+                "total_responses": 9,
+            },
+        ]
+    )
+
+    result = merger.build_monthly_rating_summary(monthly_ratings)
+
+    assert result.to_dict("records") == [
+        {"month": "2026-05", "target": "groups", "avg_rating": 4.6}
+    ]

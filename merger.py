@@ -327,13 +327,19 @@ def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame
     return metrics[columns]
 
 
-def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame) -> dict:
+def build_global_summary(
+    org_summary: pd.DataFrame,
+    bundle_counts: pd.DataFrame,
+    star_ratings: pd.DataFrame,
+) -> dict:
     """
     Computes scalar totals for the Global Overview tab.
 
     Args:
         org_summary:    output of build_org_summary
         bundle_counts:  organisation_name, total_groups  (from database.get_bundle_counts_per_org)
+        star_ratings:   organisation_name, target, avg_rating, total_responses
+                        (from database.get_star_ratings_by_org)
 
     Returns:
         dict with keys:
@@ -348,19 +354,60 @@ def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame)
     # Exclude "Unassigned" from org count — not a real organisation
     real_orgs = org_summary[org_summary["organisation_name"] != _NO_ORG]
 
-    # Weighted average across orgs: use 0-rated orgs only if they have responses
-    groups_rated = org_summary[org_summary["groups_avg_rating"] > 0]["groups_avg_rating"]
-    therapists_rated = org_summary[org_summary["therapists_avg_rating"] > 0]["therapists_avg_rating"]
-
     return {
         "total_organisations": int(len(real_orgs)),
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
         "total_sessions_delivered_30": int(org_summary["sessions_delivered_30_days"].sum()),
         "total_sessions_delivered_90": int(org_summary["sessions_delivered_90_days"].sum()),
-        "overall_groups_avg_rating": round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0,
-        "overall_therapists_avg_rating": round(float(therapists_rated.mean()), 2) if not therapists_rated.empty else 0.0,
+        "overall_groups_avg_rating": _weighted_rating_average(star_ratings, "groups"),
+        "overall_therapists_avg_rating": _weighted_rating_average(star_ratings, "therapists"),
     }
+
+
+def build_monthly_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
+    """Build response-weighted monthly ratings across all organisations."""
+    columns = ["month", "target", "avg_rating"]
+    if monthly_ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings = monthly_ratings.copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["avg_rating"].notna() & (ratings["total_responses"] > 0)
+    ].copy()
+    if ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings["rating_total"] = ratings["avg_rating"] * ratings["total_responses"]
+    summary = (
+        ratings.groupby(["month", "target"], as_index=False)
+        .agg(rating_total=("rating_total", "sum"), total_responses=("total_responses", "sum"))
+    )
+    summary["avg_rating"] = (summary["rating_total"] / summary["total_responses"]).round(2)
+    return summary[columns]
+
+
+def _weighted_rating_average(star_ratings: pd.DataFrame, target: str) -> float:
+    if star_ratings.empty:
+        return 0.0
+
+    ratings = star_ratings[star_ratings["target"] == target].copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["avg_rating"].notna() & (ratings["total_responses"] > 0)
+    ]
+    if ratings.empty:
+        return 0.0
+
+    weighted_total = (ratings["avg_rating"] * ratings["total_responses"]).sum()
+    return round(float(weighted_total / ratings["total_responses"].sum()), 2)
 
 
 def build_activity_usage_table(
