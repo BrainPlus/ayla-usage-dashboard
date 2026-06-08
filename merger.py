@@ -369,8 +369,20 @@ def build_global_summary(
     # Exclude "Unassigned" from org count — not a real organisation
     real_orgs = org_summary[org_summary["organisation_name"] != _NO_ORG]
 
-    groups_average = _weighted_rating_average(star_ratings, "groups") if star_ratings is not None else 0.0
-    therapists_average = _weighted_rating_average(star_ratings, "therapists") if star_ratings is not None else 0.0
+    if star_ratings is not None:
+        groups_average = _weighted_rating_average(star_ratings, "groups")
+        therapists_average = _weighted_rating_average(star_ratings, "therapists")
+    else:
+        groups_rated = org_summary[org_summary["groups_avg_rating"] > 0]["groups_avg_rating"]
+        therapists_rated = org_summary[org_summary["therapists_avg_rating"] > 0]["therapists_avg_rating"]
+        groups_average = (
+            round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0
+        )
+        therapists_average = (
+            round(float(therapists_rated.mean()), 2)
+            if not therapists_rated.empty
+            else 0.0
+        )
 
     return {
         "total_organisations": int(len(real_orgs)),

@@ -129,7 +129,7 @@ Sorted descending by `Completions` (most used first).
 - `overall_groups_avg_rating` (float, 2 decimal) — response-weighted mean across all organisations
 - `overall_therapists_avg_rating` (float, 2 decimal) — same
 
-**Notes:** Rating averages are weighted by `total_responses`, so every submitted rating contributes equally regardless of organisation size.
+**Notes:** When `star_ratings` is provided, rating averages are weighted by `total_responses`, so every submitted rating contributes equally regardless of organisation size. When omitted, the function preserves compatibility by falling back to an unweighted mean of the non-zero organisation-level ratings in `org_summary`.
 
 ---
 
