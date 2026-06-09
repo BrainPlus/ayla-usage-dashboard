@@ -29,17 +29,11 @@ def _visit_durations(rows: list[dict]) -> pd.DataFrame:
 def _build_user_detail(
     visit_durations: pd.DataFrame,
     db_users: pd.DataFrame | None = None,
-    logins_30: pd.DataFrame | None = None,
-    logins_90: pd.DataFrame | None = None,
+    logins: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     return merger.build_user_detail(
         db_users if db_users is not None else _base_users(),
-        logins_30
-        if logins_30 is not None
-        else _empty(["user_id", "visits"]),
-        logins_90
-        if logins_90 is not None
-        else _empty(["user_id", "visits"]),
+        logins if logins is not None else _empty(["user_id", "visits"]),
         _empty(["user_id", "last_login_date"]),
         visit_durations,
         _empty(["user_id", "activities_completed"]),
@@ -143,7 +137,6 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
         org_summary = merger.build_org_summary(
             user_detail,
             _empty(["bundle_id", "session_id", "user_id"]),
-            _empty(["bundle_id", "session_id", "user_id"]),
             _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
             pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         )
@@ -219,23 +212,16 @@ def test_org_summary_sums_short_visits_and_uses_mean_of_user_means() -> None:
             ]
         ),
         db_users=db_users,
-        logins_30=pd.DataFrame(
+        logins=pd.DataFrame(
             [
                 {"user_id": "u1", "visits": 2},
                 {"user_id": "u2", "visits": 1},
-            ]
-        ),
-        logins_90=pd.DataFrame(
-            [
-                {"user_id": "u1", "visits": 4},
-                {"user_id": "u2", "visits": 3},
             ]
         ),
     )
 
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),

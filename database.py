@@ -8,13 +8,6 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 
 
-def _star_rating_params(date_range: str) -> dict:
-    """Returns date parameters from a "YYYY-MM-DD,YYYY-MM-DD" string."""
-    start_str, end_str = date_range.split(",")
-    start_date = date.fromisoformat(start_str.strip())
-    end_date = date.fromisoformat(end_str.strip())
-    return {"start": start_date, "end_exclusive": end_date + timedelta(days=1)}
-
 
 def get_engine(region: str):
     """
