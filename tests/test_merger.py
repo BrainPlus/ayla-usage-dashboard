@@ -29,17 +29,11 @@ def _visit_durations(rows: list[dict]) -> pd.DataFrame:
 def _build_user_detail(
     visit_durations: pd.DataFrame,
     db_users: pd.DataFrame | None = None,
-    logins_30: pd.DataFrame | None = None,
-    logins_90: pd.DataFrame | None = None,
+    logins: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     return merger.build_user_detail(
         db_users if db_users is not None else _base_users(),
-        logins_30
-        if logins_30 is not None
-        else _empty(["user_id", "visits"]),
-        logins_90
-        if logins_90 is not None
-        else _empty(["user_id", "visits"]),
+        logins if logins is not None else _empty(["user_id", "visits"]),
         _empty(["user_id", "last_login_date"]),
         visit_durations,
         _empty(["user_id", "activities_completed"]),
@@ -143,7 +137,6 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
         org_summary = merger.build_org_summary(
             user_detail,
             _empty(["bundle_id", "session_id", "user_id"]),
-            _empty(["bundle_id", "session_id", "user_id"]),
             _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
             pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
             visit_durations=_visit_durations([]),
@@ -220,23 +213,16 @@ def test_org_summary_sums_short_visits_and_uses_median_of_user_medians() -> None
             ]
         ),
         db_users=db_users,
-        logins_30=pd.DataFrame(
+        logins=pd.DataFrame(
             [
                 {"user_id": "u1", "visits": 2},
                 {"user_id": "u2", "visits": 1},
-            ]
-        ),
-        logins_90=pd.DataFrame(
-            [
-                {"user_id": "u1", "visits": 4},
-                {"user_id": "u2", "visits": 3},
             ]
         ),
     )
 
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
@@ -291,7 +277,6 @@ def test_org_summary_two_level_median() -> None:
     org_summary = merger.build_org_summary(
         user_detail,
         _empty(["bundle_id", "session_id", "user_id"]),
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -315,7 +300,6 @@ def _base_org_setup_for_minmax(visit_rows):
 def _org_summary_with_vd(user_detail, vd, user_count=2):
     return merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": user_count}]),
@@ -347,7 +331,6 @@ def test_org_min_max_single_session() -> None:
     org_summary = merger.build_org_summary(
         user_detail,
         _empty(["bundle_id", "session_id", "user_id"]),
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=vd,
@@ -369,7 +352,6 @@ def test_org_min_max_excludes_short_visits() -> None:
     user_detail = _build_user_detail(vd, db_users=db_users)
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
@@ -419,7 +401,6 @@ def test_org_avg_falls_back_to_user_detail_when_visit_durations_absent() -> None
     org_summary = merger.build_org_summary(
         user_detail,
         _empty(["bundle_id", "session_id", "user_id"]),
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -443,7 +424,6 @@ def test_org_min_max_no_real_sessions() -> None:
     org_summary = merger.build_org_summary(
         user_detail,
         _empty(["bundle_id", "session_id", "user_id"]),
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=vd,
@@ -455,7 +435,7 @@ def test_org_min_max_no_real_sessions() -> None:
 
 
 def test_avg_activities_per_session_basic() -> None:
-    """Sum activities_completed across users, divide by sessions_delivered_30_days."""
+    """Sum activities_completed across users, divide by sessions_delivered."""
     db_users = pd.DataFrame([
         {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
         {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
@@ -466,7 +446,6 @@ def test_avg_activities_per_session_basic() -> None:
     ])
     user_detail = merger.build_user_detail(
         db_users,
-        _empty(["user_id", "visits"]),
         _empty(["user_id", "visits"]),
         _empty(["user_id", "last_login_date"]),
         _visit_durations([]),
@@ -480,7 +459,6 @@ def test_avg_activities_per_session_basic() -> None:
     org_summary = merger.build_org_summary(
         user_detail,
         sessions_30,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -598,7 +576,7 @@ def test_activity_catalogue_match_stats_partial_match() -> None:
 
 
 def test_avg_activities_per_session_zero_sessions_delivered() -> None:
-    """When sessions_delivered_30_days == 0, result must be 0.0 (not NaN or error)."""
+    """When sessions_delivered == 0, result must be 0.0 (not NaN or error)."""
     db_users = pd.DataFrame([
         {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
     ])
@@ -608,14 +586,12 @@ def test_avg_activities_per_session_zero_sessions_delivered() -> None:
     user_detail = merger.build_user_detail(
         db_users,
         _empty(["user_id", "visits"]),
-        _empty(["user_id", "visits"]),
         _empty(["user_id", "last_login_date"]),
         _visit_durations([]),
         activity_completions,
     )
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
@@ -632,14 +608,12 @@ def test_global_summary_weights_ratings_by_response_count() -> None:
             {
                 "organisation_name": "Org A",
                 "total_users": 1,
-                "sessions_delivered_30_days": 2,
-                "sessions_delivered_90_days": 3,
+                "sessions_delivered": 2,
             },
             {
                 "organisation_name": "Org B",
                 "total_users": 1,
-                "sessions_delivered_30_days": 4,
-                "sessions_delivered_90_days": 5,
+                "sessions_delivered": 4,
             },
         ]
     )
@@ -682,22 +656,43 @@ def test_global_summary_weights_ratings_by_response_count() -> None:
     assert result["overall_therapists_avg_rating"] == 2.5
 
 
+def test_global_summary_with_single_organisation_input() -> None:
+    org_summary = pd.DataFrame(
+        [
+            {
+                "organisation_name": "Org A",
+                "total_users": 3,
+                "sessions_delivered": 4,
+            }
+        ]
+    )
+
+    result = merger.build_global_summary(
+        org_summary,
+        pd.DataFrame([{"organisation_name": "Org A", "total_groups": 2}]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+    )
+
+    assert result["total_organisations"] == 1
+    assert result["total_users"] == 3
+    assert result["total_groups_created"] == 2
+    assert result["total_sessions_delivered"] == 4
+
+
 def test_global_summary_falls_back_to_org_averages_without_star_ratings() -> None:
     org_summary = pd.DataFrame(
         [
             {
                 "organisation_name": "Org A",
                 "total_users": 1,
-                "sessions_delivered_30_days": 2,
-                "sessions_delivered_90_days": 3,
+                "sessions_delivered": 2,
                 "groups_avg_rating": 1.0,
                 "therapists_avg_rating": 0.0,
             },
             {
                 "organisation_name": "Org B",
                 "total_users": 1,
-                "sessions_delivered_30_days": 4,
-                "sessions_delivered_90_days": 5,
+                "sessions_delivered": 4,
                 "groups_avg_rating": 5.0,
                 "therapists_avg_rating": 4.0,
             },

@@ -16,6 +16,90 @@ APP_REVISION = "2026-06-08-global-summary-compat-v2"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
+_REPORT_DATA_KEYS = (
+    "user_detail",
+    "org_summary",
+    "global_summary",
+    "monthly_ratings",
+    "bundle_counts",
+    "activity_catalogue",
+    "activity_usage",
+    "region",
+    "date_range",
+    "fetched_region",
+    "fetched_org_id",
+    "fetched_org_name",
+    "fetched_date_range",
+)
+
+_OVERVIEW_METRICS = (
+    (
+        "total_organisations",
+        "Organisations",
+        "Current number of organisations represented in the report. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_users",
+        "Total Users",
+        "Current number of registered users represented in the report. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_groups_created",
+        "Groups Created",
+        "Current total number of groups stored for the selected organisation scope. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_sessions_delivered",
+        "Sessions Delivered",
+        "Unique CST sessions delivered during the selected date range.",
+    ),
+    (
+        "overall_groups_avg_rating",
+        "Avg Group Rating",
+        "Response-weighted average of group ratings submitted during the selected date range.",
+    ),
+    (
+        "overall_therapists_avg_rating",
+        "Avg Therapist Rating",
+        "Response-weighted average of therapist ratings submitted during the selected date range.",
+    ),
+)
+
+_SECTION_HELP = {
+    "overview": (
+        "Summary for the selected organisation scope. Sessions and ratings use the "
+        "selected date range; organisations, users, and groups are current totals."
+    ),
+    "logins_by_organisation": (
+        "Number of Matomo visits, grouped by organisation, during the selected date "
+        "range. A visit is treated as a login/browser session."
+    ),
+    "monthly_average_star_ratings": (
+        "Response-weighted average group and therapist ratings submitted during the "
+        "selected date range, grouped by calendar month."
+    ),
+    "activity_usage": (
+        "Activity Complete events recorded during the selected date range and "
+        "organisation scope. Only activities completed in deliver mode are counted. "
+        "Activity names come from the current Squidex catalogue."
+    ),
+    "by_organisation": (
+        "Organisation-level details. Logins, active users, session-duration metrics, "
+        "sessions delivered, activity averages, and ratings use the selected date "
+        "range. Total users is the current registered-user count. Last login is the "
+        "most recent recorded visit found within the last 365 days."
+    ),
+    "by_user": (
+        "User-level details. Logins, session-duration metrics, and completed activities "
+        "use the selected date range. User, email, and organisation are current "
+        "database details. Last login is the most recent recorded visit found within "
+        "the last 365 days."
+    ),
+}
+
 
 def _column_config_for(dataframe, column_config):
     return {
@@ -25,16 +109,45 @@ def _column_config_for(dataframe, column_config):
     }
 
 
+def _overview_metrics(fetched_org_id):
+    if fetched_org_id is None:
+        return _OVERVIEW_METRICS
+    return tuple(
+        metric for metric in _OVERVIEW_METRICS if metric[0] != "total_organisations"
+    )
+
+
+def _show_logins_by_organisation(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
+def _show_user_organisation_filter(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
 # ── deploy-compatibility helpers ──────────────────────────────────────────────
 # These wrappers guard against Streamlit's module-caching during hot deploys.
 # Stale cached module objects may lack new functions or accept fewer arguments.
 # Commits 18d5df5, c814074, 44be948 document when each guard was needed.
 
-def _get_activity_usage_by_id(date_range: str):
-    # commit 18d5df5: reload matomo if the function was added after the cached import
+def _get_activity_usage_by_id(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+):
+    # commit 18d5df5: reload matomo if the function or its new argument was added
+    # after the cached import.
     global matomo
-    if not hasattr(matomo, "get_activity_usage_by_id"):
+    if (
+        not hasattr(matomo, "get_activity_usage_by_id")
+        or len(inspect.signature(matomo.get_activity_usage_by_id).parameters) < 3
+    ):
         matomo = importlib.reload(matomo)
+    parameter_count = len(inspect.signature(matomo.get_activity_usage_by_id).parameters)
+    if parameter_count >= 3:
+        return matomo.get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
+    if parameter_count >= 2:
+        return matomo.get_activity_usage_by_id(date_range, allowed_user_ids)
     return matomo.get_activity_usage_by_id(date_range)
 
 
@@ -103,6 +216,45 @@ def _weighted_rating_average(star_ratings, target):
     return round(float(weighted_total / ratings["total_responses"].sum()), 2)
 
 
+def _should_clear_report(
+    session_state: dict,
+    current_region: str,
+    current_org_id,
+    current_date_range: str,
+) -> bool:
+    if not any(
+        key in session_state
+        for key in ("user_detail", "org_summary", "global_summary")
+    ):
+        return False
+    fetched_region = session_state.get("fetched_region")
+    fetched_org_id = session_state.get("fetched_org_id")
+    fetched_date_range = session_state.get("fetched_date_range")
+    return (
+        fetched_region != current_region
+        or fetched_org_id != current_org_id
+        or fetched_date_range != current_date_range
+    )
+
+
+def _filter_to_org_users(df: pd.DataFrame, org_user_ids: set[str]) -> pd.DataFrame:
+    if "user_id" not in df.columns:
+        return df
+    return df[df["user_id"].isin(org_user_ids)].reset_index(drop=True)
+
+
+def _last_login_user_ids(
+    db_users: pd.DataFrame,
+    logins: pd.DataFrame,
+    selected_org_id,
+) -> list[str]:
+    if selected_org_id is not None:
+        return sorted(set(db_users["user_id"].astype(str)))
+    return sorted(
+        set(db_users["user_id"].astype(str)) | set(logins["user_id"].astype(str))
+    )
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -112,13 +264,13 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_sessions_delivered(date_range: str):
-    return matomo.get_sessions_delivered(date_range)
+def _cached_sessions_delivered(date_range: str, region: str, org_id):
+    return matomo.get_sessions_delivered(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
-def _cached_activity_completions(date_range: str):
-    return matomo.get_activity_completions_per_user(date_range)
+def _cached_activity_completions(date_range: str, region: str, org_id):
+    return matomo.get_activity_completions_per_user(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -136,13 +288,23 @@ def _cached_activity_catalogue() -> dict:
 
 
 @st.cache_data(ttl=3600)
-def _cached_activity_usage(date_range: str):
-    return _get_activity_usage_by_id(date_range)
+def _cached_activity_usage(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return _get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
 
 
 @st.cache_data(ttl=3600)
-def _cached_visit_durations(date_range: str):
-    return matomo.get_visit_durations(date_range)
+def _cached_visit_durations(date_range: str, region: str, org_id):
+    return matomo.get_visit_durations(date_range, org_id=org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_organisations(region: str) -> pd.DataFrame:
+    return database.get_organisations(region)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -152,23 +314,44 @@ with st.sidebar:
 
     region = st.selectbox("Region", ["eu", "uk"])
 
+    orgs_df = _cached_organisations(region)
+    org_options = (
+        ["All organisations"]
+        + orgs_df["organisation_name"].tolist()
+        + ["Unassigned / No organisation"]
+    )
+    selected_org_name = st.selectbox(
+        "Organisation", org_options, key=f"org_selector_{region}"
+    )
+    if selected_org_name == "All organisations":
+        selected_org_id = None
+    elif selected_org_name == "Unassigned / No organisation":
+        selected_org_id = "unassigned"
+    else:
+        selected_org_id = int(
+            orgs_df.loc[
+                orgs_df["organisation_name"] == selected_org_name,
+                "organisation_id",
+            ].iloc[0]
+        )
+
     today = date.today()
 
-    st.markdown("**30-day window**")
-    start_30 = st.date_input("From", today - timedelta(days=30), key="start_30")
-    end_30 = st.date_input("To", today, key="end_30")
-
-    st.markdown("**90-day window**")
-    start_90 = st.date_input("From", today - timedelta(days=90), key="start_90")
-    end_90 = st.date_input("To", today, key="end_90")
+    start_date = st.date_input("From", today - timedelta(days=90), key="start_date")
+    end_date = st.date_input("To", today, key="end_date")
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Pulling last login data may take a few minutes")
-    st.caption(f"Deployment revision: {APP_REVISION}")
 
-date_range_30 = f"{start_30},{end_30}"
-date_range_90 = f"{start_90},{end_90}"
+if start_date > end_date:
+    st.error("'From' date must be on or before 'To' date.")
+    st.stop()
 
+date_range = f"{start_date},{end_date}"
+
+if _should_clear_report(st.session_state, region, selected_org_id, date_range):
+    for key in _REPORT_DATA_KEYS:
+        st.session_state.pop(key, None)
 
 # ── data fetching ─────────────────────────────────────────────────────────────
 
@@ -176,27 +359,50 @@ if pull:
     try:
         # Step 1 — DB queries (fast)
         with st.spinner("Querying database..."):
-            db_users = database.load_users_and_orgs(region)
-            org_user_counts = database.get_org_user_counts(region)
-            bundle_counts = database.get_bundle_counts_per_org(region)
-            star_ratings = database.get_star_ratings_by_org(region)
-            monthly_ratings = database.get_monthly_star_ratings(region)
+            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
+            org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
+            bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
+            star_ratings = database.get_star_ratings_by_org(
+                region, start_date, end_date, org_id=selected_org_id
+            )
+            monthly_ratings = database.get_monthly_star_ratings(
+                region, start_date, end_date, org_id=selected_org_id
+            )
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
-            logins_30 = _cached_logins(date_range_30)
-            logins_90 = _cached_logins(date_range_90)
-            sessions_30 = _cached_sessions_delivered(date_range_30)
-            sessions_90 = _cached_sessions_delivered(date_range_90)
-            activity_completions = _cached_activity_completions(date_range_30)
+            logins = _cached_logins(date_range)
+            sessions = _cached_sessions_delivered(date_range, region, selected_org_id)
+            activity_completions = _cached_activity_completions(
+                date_range, region, selected_org_id
+            )
             activity_catalogue = _cached_activity_catalogue()
-            activity_usage = _cached_activity_usage(date_range_30)
+            allowed_user_ids = (
+                frozenset(db_users["user_id"].astype(str))
+                if selected_org_id is not None
+                else None
+            )
+            activity_usage = _cached_activity_usage(
+                date_range, region, selected_org_id, allowed_user_ids
+            )
+            visit_durations = _cached_visit_durations(
+                date_range, region, selected_org_id
+            )
+
+        if selected_org_id is not None:
+            org_user_ids = set(db_users["user_id"].astype(str))
+            logins = _filter_to_org_users(logins, org_user_ids)
+            sessions = _filter_to_org_users(sessions, org_user_ids)
+            activity_completions = _filter_to_org_users(
+                activity_completions, org_user_ids
+            )
+            visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
 
         # Step 3 — Last login per user (slowest — show progress)
-        all_user_ids = sorted(
-            set(db_users["user_id"])
-            | set(logins_30["user_id"])
-            | set(logins_90["user_id"])
+        all_user_ids = _last_login_user_ids(
+            db_users,
+            logins,
+            selected_org_id,
         )
 
         with st.status("Fetching last login dates...", expanded=True) as status:
@@ -213,17 +419,13 @@ if pull:
                 expanded=False,
             )
 
-        # Step 4 — Visit durations
-        with st.spinner("Fetching session durations..."):
-            visit_durations = _cached_visit_durations(date_range_30)
-
-        # Step 5 — Build merged DataFrames
+        # Step 4 — Build merged DataFrames
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
-                db_users, logins_30, logins_90, last_login, visit_durations, activity_completions,
+                db_users, logins, last_login, visit_durations, activity_completions,
             )
             org_summary = merger.build_org_summary(
-                user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
+                user_detail, sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
             global_summary = _build_global_summary(
@@ -239,8 +441,11 @@ if pull:
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
             "region": region,
-            "date_range_30": date_range_30,
-            "date_range_90": date_range_90,
+            "date_range": date_range,
+            "fetched_region": region,
+            "fetched_org_id": selected_org_id,
+            "fetched_org_name": selected_org_name,
+            "fetched_date_range": date_range,
         })
 
         st.success("Data loaded successfully.")
@@ -265,31 +470,36 @@ else:
 
     # ── Tab 1: Global Overview ────────────────────────────────────────────────
     with tab1:
-        st.subheader("Global Overview")
+        fetched_org_name = st.session_state.get(
+            "fetched_org_name", "All organisations"
+        )
+        st.subheader(f"Overview — {fetched_org_name}", help=_SECTION_HELP["overview"])
+        if st.session_state.get("fetched_org_id") is not None:
+            st.info(f"Showing data for {fetched_org_name} only.")
 
-        metric_labels = {
-            "total_organisations":          "Organisations",
-            "total_users":                  "Total Users",
-            "total_groups_created":         "Groups Created",
-            "total_sessions_delivered_30":  "Sessions Delivered (30 days)",
-            "total_sessions_delivered_90":  "Sessions Delivered (90 days)",
-            "overall_groups_avg_rating":    "Avg Group Rating",
-            "overall_therapists_avg_rating": "Avg Therapist Rating",
-        }
-        cols = st.columns(len(metric_labels))
-        for col, (key, label) in zip(cols, metric_labels.items()):
-            col.metric(label, global_summary[key])
+        fetched_org_id = st.session_state.get("fetched_org_id")
+        overview_metrics = _overview_metrics(fetched_org_id)
+        cols = st.columns(len(overview_metrics))
+        for col, (key, label, help_text) in zip(cols, overview_metrics):
+            col.metric(label, global_summary[key], help=help_text)
 
         st.divider()
 
-        st.markdown("**Logins by Organisation (30 days)**")
-        chart_data = (
-            org_summary.set_index("organisation_name")["logins_30_days"]
-            .sort_values(ascending=False)
-        )
-        st.bar_chart(chart_data)
+        if _show_logins_by_organisation(fetched_org_id):
+            st.markdown(
+                "**Logins by Organisation**",
+                help=_SECTION_HELP["logins_by_organisation"],
+            )
+            chart_data = (
+                org_summary.set_index("organisation_name")["logins"]
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(chart_data)
 
-        st.markdown("**Monthly Average Star Ratings**")
+        st.markdown(
+            "**Monthly Average Star Ratings**",
+            help=_SECTION_HELP["monthly_average_star_ratings"],
+        )
         if not monthly_ratings.empty:
             monthly_pivot = (
                 _build_monthly_rating_summary(monthly_ratings)
@@ -305,7 +515,7 @@ else:
             st.info("No monthly rating data available.")
 
         st.divider()
-        st.subheader("Activity Usage (last 30 days)")
+        st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
             _activity_catalogue = st.session_state.get("activity_catalogue", {})
@@ -368,7 +578,7 @@ else:
 
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
-        st.subheader("By Organisation")
+        st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
         st.dataframe(
             org_summary,
             column_config=_column_config_for(org_summary, {
@@ -378,14 +588,11 @@ else:
                 "total_users": st.column_config.NumberColumn(
                     help="Total number of registered users in this organisation",
                 ),
-                "active_users_30": st.column_config.NumberColumn(
-                    help="Users with 2 or more logins in the 30-day window",
+                "active_users": st.column_config.NumberColumn(
+                    help="Users with 2 or more logins in the selected period",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the selected period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -412,24 +619,17 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
-                "sessions_delivered_30_days": st.column_config.NumberColumn(
+                "sessions_delivered": st.column_config.NumberColumn(
                     help=(
-                        "Unique CST therapy sessions delivered in the 30-day window — counted as "
-                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
-                        "Different unit from visit-based duration metrics."
-                    ),
-                ),
-                "sessions_delivered_90_days": st.column_config.NumberColumn(
-                    help=(
-                        "Unique CST therapy sessions delivered in the 90-day window — counted as "
+                        "Unique CST therapy sessions delivered in the selected period — counted as "
                         "unique (bundle + session ID) pairs with at least one deliver-mode action. "
                         "Different unit from visit-based duration metrics."
                     ),
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(
-                        "Total Activity Complete events (30-day window) divided by sessions "
-                        "delivered (30-day window). Note: the Activity Complete event fires on "
+                        "Total Activity Complete events divided by sessions delivered in the "
+                        "selected period. Note: the Activity Complete event fires on "
                         "forward navigation, so rapid click-through may inflate this count."
                     ),
                     format="%.1f",
@@ -451,8 +651,14 @@ else:
 
     # ── Tab 3: By User ────────────────────────────────────────────────────────
     with tab3:
-        st.subheader("By User")
-        org_filter = st.text_input("Filter by organisation name")
+        st.subheader("By User", help=_SECTION_HELP["by_user"])
+        org_filter = (
+            st.text_input("Filter by organisation name")
+            if _show_user_organisation_filter(
+                st.session_state.get("fetched_org_id")
+            )
+            else ""
+        )
         filtered = (
             user_detail
             if not org_filter
@@ -475,11 +681,8 @@ else:
                 "last_login_date": st.column_config.TextColumn(
                     help="Most recent recorded Matomo visit date",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the selected period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -521,11 +724,15 @@ if "user_detail" in st.session_state:
         st.session_state["org_summary"],
         st.session_state["monthly_ratings"],
         st.session_state["region"],
-        st.session_state["date_range_30"],
-        st.session_state["date_range_90"],
+        st.session_state["date_range"],
         activity_usage_table=merger.build_activity_usage_table(
             _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
+        ),
+        org_filter_name=(
+            None
+            if st.session_state.get("fetched_org_id") is None
+            else st.session_state.get("fetched_org_name")
         ),
     )
     st.download_button(

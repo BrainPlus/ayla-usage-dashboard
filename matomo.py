@@ -55,6 +55,12 @@ def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
     return all_visits
 
 
+def _organisation_segment(org_id) -> dict:
+    if isinstance(org_id, int):
+        return {"segment": f"dimension13=={org_id}"}
+    return {}
+
+
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     """
     Fetches unique user logins within a date range.
@@ -136,7 +142,7 @@ def get_last_login_per_user(
     return pd.DataFrame(records, columns=["user_id", "last_login_date"])
 
 
-def get_visit_durations(date_range: str) -> pd.DataFrame:
+def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
     """
     Fetches raw visit durations over a date range.
 
@@ -157,6 +163,7 @@ def get_visit_durations(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
+            **_organisation_segment(org_id),
         }
     )
 
@@ -183,7 +190,7 @@ def get_visit_durations(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def get_sessions_delivered(date_range: str) -> pd.DataFrame:
+def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
     """
     Fetches delivered session instances as (bundleId, sessionId, userId) rows.
 
@@ -208,6 +215,7 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
+            **_organisation_segment(org_id),
         }
     )
 
@@ -230,7 +238,7 @@ def get_sessions_delivered(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
 
 
-def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
+def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFrame:
     """
     Counts completed activities per user in delivered sessions only.
 
@@ -249,6 +257,7 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
+            **_organisation_segment(org_id),
         }
     )
 
@@ -273,7 +282,11 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["user_id", "activities_completed"])
 
 
-def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
+def get_activity_usage_by_id(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+) -> pd.DataFrame:
     """
     Counts Activity Complete events per activityId and language in delivered sessions only.
 
@@ -285,6 +298,7 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
 
     Returns:
         DataFrame with columns: activity_id (str), language (str), completion_count (int)
@@ -295,7 +309,9 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-        }
+            **_organisation_segment(org_id),
+        },
+        page_size=10000,
     )
 
     if not data:
@@ -303,6 +319,11 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
 
     counts: dict[tuple[str, str], int] = {}
     for visit in data:
+        if (
+            allowed_user_ids is not None
+            and str(visit.get("userId", "")) not in allowed_user_ids
+        ):
+            continue
         for action in visit.get("actionDetails", []):
             if (
                 _extract_dimension(action, "10") == "false"
@@ -320,7 +341,11 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
         return empty
     df = pd.DataFrame(
         [
-            {"activity_id": activity_id, "language": language, "completion_count": count}
+            {
+                "activity_id": activity_id,
+                "language": language,
+                "completion_count": count,
+            }
             for (activity_id, language), count in counts.items()
         ]
     )

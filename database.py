@@ -1,6 +1,8 @@
 # All PostgreSQL queries: users, organisations, bundles, feedback_questions, feedback_answers.
 # Never use SELECT * FROM bundles — always write targeted queries.
 
+from datetime import date, timedelta
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
@@ -26,7 +28,31 @@ def get_engine(region: str):
     return create_engine(url)
 
 
-def load_users_and_orgs(region: str) -> pd.DataFrame:
+def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | None]:
+    if org_id == "unassigned":
+        return f"{prefix} u.organisation_id IS NULL", None
+    if org_id is not None:
+        return f"{prefix} u.organisation_id = :org_id", {"org_id": org_id}
+    return "", None
+
+
+def get_organisations(region: str) -> pd.DataFrame:
+    """Returns all organisations ordered by name."""
+    sql = text("""
+        SELECT
+            id   AS organisation_id,
+            name AS organisation_name
+        FROM organisations
+        ORDER BY name
+    """)
+    with get_engine(region).connect() as conn:
+        df = pd.read_sql(sql, conn)
+    df["organisation_id"] = df["organisation_id"].astype(int)
+    df["organisation_name"] = df["organisation_name"].astype(str)
+    return df
+
+
+def load_users_and_orgs(region: str, org_id=None) -> pd.DataFrame:
     """
     Loads all users joined with their organisation name.
 
@@ -35,17 +61,19 @@ def load_users_and_orgs(region: str) -> pd.DataFrame:
 
     Users with no organisation are labelled "Unassigned / No organisation".
     """
-    sql = text("""
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
         SELECT
             u.id            AS user_id,
             u.email,
             o.name          AS organisation_name
         FROM users u
         LEFT JOIN organisations o ON o.id = u.organisation_id
+        {filter_sql}
         ORDER BY u.id
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(sql, conn, params=params)
 
     df["user_id"] = df["user_id"].astype(str)
     df["organisation_name"] = df["organisation_name"].fillna("Unassigned / No organisation")
@@ -54,29 +82,31 @@ def load_users_and_orgs(region: str) -> pd.DataFrame:
     return df
 
 
-def get_org_user_counts(region: str) -> pd.DataFrame:
+def get_org_user_counts(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts users per organisation.
 
     Returns columns: organisation_name (str), user_count (int)
     Users with no organisation are counted under "Unassigned / No organisation".
     """
-    sql = text("""
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             COUNT(u.id)                                       AS user_count
         FROM users u
         LEFT JOIN organisations o ON o.id = u.organisation_id
+        {filter_sql}
         GROUP BY organisation_name
         ORDER BY organisation_name
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(sql, conn, params=params)
 
     return df
 
 
-def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
+def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts the number of groups (bundles) created per organisation.
 
@@ -85,23 +115,30 @@ def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
     Note: never uses SELECT * FROM bundles — only fetches b.id and b.user_id.
     Relationship: bundles.user_id → users.id → users.organisation_id → organisations.id
     """
-    sql = text("""
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             COUNT(b.id) AS total_groups
         FROM bundles b
         JOIN users u ON u.id = b.user_id
         LEFT JOIN organisations o ON o.id = u.organisation_id
-        GROUP BY o.name
-        ORDER BY o.name
+        {filter_sql}
+        GROUP BY organisation_name
+        ORDER BY organisation_name
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(sql, conn, params=params)
 
     return df
 
 
-def get_star_ratings_by_org(region: str) -> pd.DataFrame:
+def get_star_ratings_by_org(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
     """
     Calculates average star rating and response count per organisation and feedback target.
 
@@ -113,7 +150,13 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
     Returns columns:
         organisation_name (str), target (str), avg_rating (float), total_responses (int)
     """
-    sql = text("""
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
@@ -124,16 +167,23 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
+        {filter_sql}
         GROUP BY COALESCE(o.name, 'Unassigned / No organisation'), fq.target
         ORDER BY COALESCE(o.name, 'Unassigned / No organisation')
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(sql, conn, params=params)
 
     return df
 
 
-def get_monthly_star_ratings(region: str) -> pd.DataFrame:
+def get_monthly_star_ratings(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
     """
     Calculates average star rating per month, organisation, and feedback target.
 
@@ -145,7 +195,13 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
-    sql = text("""
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
         SELECT
             TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
@@ -157,11 +213,13 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
+        {filter_sql}
         GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'), fq.target
         ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation')
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(sql, conn, params=params)
 
     return df
 

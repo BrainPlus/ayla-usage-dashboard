@@ -2,12 +2,55 @@ import sys
 from types import ModuleType
 
 import pandas as pd
+import pytest
 
 streamlit_stub = ModuleType("streamlit")
 streamlit_stub.secrets = {}
 sys.modules.setdefault("streamlit", streamlit_stub)
 
 import matomo
+
+
+@pytest.mark.parametrize(
+    "function_name",
+    [
+        "get_visit_durations",
+        "get_sessions_delivered",
+        "get_activity_completions_per_user",
+        "get_activity_usage_by_id",
+    ],
+)
+def test_live_visit_queries_apply_integer_organisation_segment(
+    monkeypatch, function_name
+) -> None:
+    captured = {}
+
+    def fake_fetch(params, page_size=5000):
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
+
+    getattr(matomo, function_name)("2026-01-01,2026-01-31", org_id=196)
+
+    assert captured["params"]["segment"] == "dimension13==196"
+
+
+@pytest.mark.parametrize("org_id", [None, "unassigned"])
+def test_live_visit_queries_omit_organisation_segment_without_integer_org(
+    monkeypatch, org_id
+) -> None:
+    captured = {}
+
+    def fake_fetch(params, page_size=5000):
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
+
+    matomo.get_sessions_delivered("2026-01-01,2026-01-31", org_id=org_id)
+
+    assert "segment" not in captured["params"]
 
 
 def test_get_sessions_delivered_counts_all_deliver_visits_regardless_of_duration(monkeypatch) -> None:
@@ -70,7 +113,6 @@ def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
                     "eventAction": "Activity Complete",
                     "dimension10": "false",
                     "dimension6": "act-123",
-                    "dimension2": "da-DK",
                 },
                 {
                     "type": "event",
@@ -86,13 +128,14 @@ def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
     result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
     assert len(result) == 1
     assert result.iloc[0]["activity_id"] == "act-123"
-    assert result.iloc[0]["language"] == "da-DK"
+    assert result.iloc[0]["language"] == ""
     assert result.iloc[0]["completion_count"] == 1
 
 
-def test_get_activity_usage_by_id_counts_same_activity_per_language(monkeypatch) -> None:
+def test_get_activity_usage_by_id_allowed_user_ids_excludes_other_users(monkeypatch) -> None:
     visits = [
         {
+            "userId": "u1",
             "actionDetails": [
                 {
                     "type": "event",
@@ -100,30 +143,71 @@ def test_get_activity_usage_by_id_counts_same_activity_per_language(monkeypatch)
                     "eventAction": "Activity Complete",
                     "dimension10": "false",
                     "dimension6": "act-123",
-                    "dimension2": "en-GB",
-                },
+                }
+            ],
+        },
+        {
+            "userId": "u2",
+            "actionDetails": [
                 {
                     "type": "event",
                     "eventCategory": "Activity",
                     "eventAction": "Activity Complete",
                     "dimension10": "false",
                     "dimension6": "act-123",
-                    "dimension2": "da-DK",
                 },
             ]
-        }
+        },
     ]
     monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
 
-    result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
+    result = matomo.get_activity_usage_by_id(
+        "2024-01-01,2024-01-31", frozenset({"u1"})
+    )
 
-    assert {
-        (row["activity_id"], row["language"], row["completion_count"])
-        for row in result.to_dict("records")
-    } == {
-        ("act-123", "en-GB", 1),
-        ("act-123", "da-DK", 1),
-    }
+    assert result.to_dict("records") == [
+        {"activity_id": "act-123", "language": "", "completion_count": 1}
+    ]
+
+
+def test_get_activity_usage_by_id_without_allowed_users_counts_all(monkeypatch) -> None:
+    visits = [
+        {
+            "userId": user_id,
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Complete",
+                    "dimension10": "false",
+                    "dimension6": "act-123",
+                }
+            ],
+        }
+        for user_id in ("u1", "u2")
+    ]
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
+
+    result = matomo.get_activity_usage_by_id("2024-01-01,2024-01-31", None)
+
+    assert result.to_dict("records") == [
+        {"activity_id": "act-123", "language": "", "completion_count": 2}
+    ]
+
+
+def test_get_activity_usage_by_id_empty_allowed_users_returns_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        matomo,
+        "matomo_get",
+        lambda params: [{"userId": "u1", "actionDetails": []}],
+    )
+
+    result = matomo.get_activity_usage_by_id(
+        "2024-01-01,2024-01-31", frozenset()
+    )
+
+    assert result.empty
+    assert list(result.columns) == ["activity_id", "language", "completion_count"]
 
 
 def test_get_activity_usage_by_id_non_list_raises(monkeypatch) -> None:
