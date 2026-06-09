@@ -5,16 +5,15 @@ import io
 import pandas as pd
 
 
-def build_methodology_df(region: str, date_range_30: str, date_range_90: str) -> pd.DataFrame:
+def build_methodology_df(region: str, date_range: str) -> pd.DataFrame:
     """Builds the Methodology sheet content as a two-column DataFrame."""
     rows = [
         ("Region", region),
-        ("30-day window", date_range_30),
-        ("90-day window", date_range_90),
+        ("Reporting period", date_range),
         ("Source of usage data", "Matomo API"),
         ("Source of organisation mapping", "PostgreSQL database"),
         ("Logins", "Number of Matomo visits per user/organisation"),
-        ("Active users", "Users with 2 or more logins in the 30-day window"),
+        ("Active users", "Users with 2 or more logins in the reporting period"),
         (
             "Avg real session time",
             "Average duration in minutes for deliver visits longer than 20 minutes",
@@ -53,8 +52,7 @@ def build_excel_report(
     org_summary: pd.DataFrame,
     monthly_ratings: pd.DataFrame,
     region: str,
-    date_range_30: str,
-    date_range_90: str,
+    date_range: str,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
@@ -72,13 +70,12 @@ def build_excel_report(
         org_summary:     output of merger.build_org_summary
         monthly_ratings: output of database.get_monthly_star_ratings
         region:          "uk" or "eu"
-        date_range_30:   "YYYY-MM-DD,YYYY-MM-DD" for the 30-day window
-        date_range_90:   "YYYY-MM-DD,YYYY-MM-DD" for the 90-day window
+        date_range:      "YYYY-MM-DD,YYYY-MM-DD" for the reporting period
 
     Returns:
         bytes of the .xlsx file
     """
-    methodology = build_methodology_df(region, date_range_30, date_range_90)
+    methodology = build_methodology_df(region, date_range)
 
     sheets = [
         ("Organisation Summary", org_summary),

@@ -10,8 +10,7 @@ _REAL_SESSION_MIN_SECONDS = 20 * 60
 
 def build_user_detail(
     db_users: pd.DataFrame,
-    logins_30: pd.DataFrame,
-    logins_90: pd.DataFrame,
+    logins: pd.DataFrame,
     last_login: pd.DataFrame,
     visit_durations: pd.DataFrame,
     activity_completions: pd.DataFrame,
@@ -22,8 +21,7 @@ def build_user_detail(
 
     Args:
         db_users:              user_id, email, organisation_name
-        logins_30:             user_id, visits  (30-day window)
-        logins_90:             user_id, visits  (90-day window)
+        logins:                user_id, visits
         last_login:            user_id, last_login_date
         visit_durations:       user_id, visit_duration_seconds, has_deliver_action
         activity_completions:  user_id, activities_completed
@@ -31,26 +29,21 @@ def build_user_detail(
     Returns:
         DataFrame with columns:
             user_id, email, organisation_name, last_login_date,
-            logins_30_days, logins_90_days, avg_real_session_minutes,
+            logins, avg_real_session_minutes,
             avg_prepare_minutes, short_visit_count, activities_completed
     """
     df = db_users.copy()
     duration_metrics = _build_visit_duration_metrics(visit_durations)
 
     df = df.merge(
-        logins_30.rename(columns={"visits": "logins_30_days"}),
-        on="user_id", how="left",
-    )
-    df = df.merge(
-        logins_90.rename(columns={"visits": "logins_90_days"}),
+        logins.rename(columns={"visits": "logins"}),
         on="user_id", how="left",
     )
     df = df.merge(last_login, on="user_id", how="left")
     df = df.merge(duration_metrics, on="user_id", how="left")
     df = df.merge(activity_completions, on="user_id", how="left")
 
-    df["logins_30_days"] = df["logins_30_days"].fillna(0).astype(int)
-    df["logins_90_days"] = df["logins_90_days"].fillna(0).astype(int)
+    df["logins"] = df["logins"].fillna(0).astype(int)
     df["last_login_date"] = df["last_login_date"].fillna(_NO_USAGE)
     df["avg_real_session_minutes"] = (
         pd.to_numeric(df["avg_real_session_minutes"], errors="coerce")
@@ -72,8 +65,7 @@ def build_user_detail(
         "email",
         "organisation_name",
         "last_login_date",
-        "logins_30_days",
-        "logins_90_days",
+        "logins",
         "avg_real_session_minutes",
         "avg_prepare_minutes",
         "short_visit_count",
@@ -83,8 +75,7 @@ def build_user_detail(
 
 def build_org_summary(
     user_detail: pd.DataFrame,
-    sessions_delivered_30: pd.DataFrame,
-    sessions_delivered_90: pd.DataFrame,
+    sessions_delivered: pd.DataFrame,
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -96,17 +87,16 @@ def build_org_summary(
 
     Args:
         user_detail:            output of build_user_detail
-        sessions_delivered_30:  bundle_id, session_id, user_id  (30-day window)
-        sessions_delivered_90:  bundle_id, session_id, user_id  (90-day window)
+        sessions_delivered:     bundle_id, session_id, user_id
         star_ratings:           organisation_name, target, avg_rating, total_responses
         org_user_counts:        organisation_name, user_count
 
     Returns:
         DataFrame with columns:
-            organisation_name, total_users, active_users_30,
-            logins_30_days, logins_90_days, avg_real_session_minutes,
+            organisation_name, total_users, active_users,
+            logins, avg_real_session_minutes,
             avg_prepare_minutes, short_visit_count,
-            sessions_delivered_30_days, sessions_delivered_90_days,
+            sessions_delivered,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
     # --- aggregate user_detail by org ---
@@ -119,12 +109,11 @@ def build_org_summary(
     )
 
     agg = user_detail.groupby("organisation_name").agg(
-        logins_30_days=("logins_30_days", "sum"),
-        logins_90_days=("logins_90_days", "sum"),
+        logins=("logins", "sum"),
         avg_real_session_minutes=("avg_real_session_minutes", lambda s: s[s > 0].mean()),
         avg_prepare_minutes=("avg_prepare_minutes", lambda s: s[s > 0].mean()),
         short_visit_count=("short_visit_count", "sum"),
-        active_users_30=("logins_30_days", lambda s: (s >= 2).sum()),
+        active_users=("logins", lambda s: (s >= 2).sum()),
     ).reset_index()
 
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].round(1)
@@ -154,11 +143,10 @@ def build_org_summary(
             .reset_index(name="sessions")
         )
 
-    s30 = _session_counts(sessions_delivered_30).rename(columns={"sessions": "sessions_delivered_30_days"})
-    s90 = _session_counts(sessions_delivered_90).rename(columns={"sessions": "sessions_delivered_90_days"})
-
-    agg = agg.merge(s30, on="organisation_name", how="left")
-    agg = agg.merge(s90, on="organisation_name", how="left")
+    session_counts = _session_counts(sessions_delivered).rename(
+        columns={"sessions": "sessions_delivered"}
+    )
+    agg = agg.merge(session_counts, on="organisation_name", how="left")
 
     # --- star ratings: pivot target → groups_avg_rating / therapists_avg_rating ---
     if not star_ratings.empty:
@@ -188,10 +176,10 @@ def build_org_summary(
 
     # --- fill missing numerics ---
     numeric_cols = [
-        "total_users", "active_users_30",
-        "logins_30_days", "logins_90_days",
+        "total_users", "active_users",
+        "logins",
         "short_visit_count",
-        "sessions_delivered_30_days", "sessions_delivered_90_days",
+        "sessions_delivered",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["avg_real_session_minutes"] = agg["avg_real_session_minutes"].fillna(0.0)
@@ -209,14 +197,12 @@ def build_org_summary(
     return agg[[
         "organisation_name",
         "total_users",
-        "active_users_30",
-        "logins_30_days",
-        "logins_90_days",
+        "active_users",
+        "logins",
         "avg_real_session_minutes",
         "avg_prepare_minutes",
         "short_visit_count",
-        "sessions_delivered_30_days",
-        "sessions_delivered_90_days",
+        "sessions_delivered",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",
@@ -290,8 +276,7 @@ def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame)
             total_organisations (int)
             total_users (int)
             total_groups_created (int)
-            total_sessions_delivered_30 (int)
-            total_sessions_delivered_90 (int)
+            total_sessions_delivered (int)
             overall_groups_avg_rating (float)
             overall_therapists_avg_rating (float)
     """
@@ -306,8 +291,7 @@ def build_global_summary(org_summary: pd.DataFrame, bundle_counts: pd.DataFrame)
         "total_organisations": int(len(real_orgs)),
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
-        "total_sessions_delivered_30": int(org_summary["sessions_delivered_30_days"].sum()),
-        "total_sessions_delivered_90": int(org_summary["sessions_delivered_90_days"].sum()),
+        "total_sessions_delivered": int(org_summary["sessions_delivered"].sum()),
         "overall_groups_avg_rating": round(float(groups_rated.mean()), 2) if not groups_rated.empty else 0.0,
         "overall_therapists_avg_rating": round(float(therapists_rated.mean()), 2) if not therapists_rated.empty else 0.0,
     }

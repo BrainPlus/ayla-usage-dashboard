@@ -1,9 +1,19 @@
 # All PostgreSQL queries: users, organisations, bundles, feedback_questions, feedback_answers.
 # Never use SELECT * FROM bundles — always write targeted queries.
 
+from datetime import date, timedelta
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+
+def _star_rating_params(date_range: str) -> dict:
+    """Returns date parameters from a "YYYY-MM-DD,YYYY-MM-DD" string."""
+    start_str, end_str = date_range.split(",")
+    start_date = date.fromisoformat(start_str.strip())
+    end_date = date.fromisoformat(end_str.strip())
+    return {"start": start_date, "end_exclusive": end_date + timedelta(days=1)}
 
 
 def get_engine(region: str):
@@ -99,7 +109,7 @@ def get_bundle_counts_per_org(region: str) -> pd.DataFrame:
     return df
 
 
-def get_star_ratings_by_org(region: str) -> pd.DataFrame:
+def get_star_ratings_by_org(region: str, start_date: date, end_date: date) -> pd.DataFrame:
     """
     Calculates average star rating and response count per organisation and feedback target.
 
@@ -111,6 +121,7 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
     Returns columns:
         organisation_name (str), target (str), avg_rating (float), total_responses (int)
     """
+    end_exclusive = end_date + timedelta(days=1)
     sql = text("""
         SELECT
             o.name                              AS organisation_name,
@@ -122,16 +133,21 @@ def get_star_ratings_by_org(region: str) -> pd.DataFrame:
         JOIN users u          ON u.id  = fa.user_id
         JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         GROUP BY o.name, fq.target
         ORDER BY o.name
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(
+            sql,
+            conn,
+            params={"start": start_date, "end_exclusive": end_exclusive},
+        )
 
     return df
 
 
-def get_monthly_star_ratings(region: str) -> pd.DataFrame:
+def get_monthly_star_ratings(region: str, start_date: date, end_date: date) -> pd.DataFrame:
     """
     Calculates average star rating per month, organisation, and feedback target.
 
@@ -143,6 +159,7 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
+    end_exclusive = end_date + timedelta(days=1)
     sql = text("""
         SELECT
             TO_CHAR(fa.created_at, 'YYYY-MM')   AS month,
@@ -155,11 +172,16 @@ def get_monthly_star_ratings(region: str) -> pd.DataFrame:
         JOIN users u           ON u.id  = fa.user_id
         JOIN organisations o   ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         GROUP BY month, o.name, fq.target
         ORDER BY month, o.name
     """)
     with get_engine(region).connect() as conn:
-        df = pd.read_sql(sql, conn)
+        df = pd.read_sql(
+            sql,
+            conn,
+            params={"start": start_date, "end_exclusive": end_exclusive},
+        )
 
     return df
 

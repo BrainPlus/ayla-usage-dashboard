@@ -10,6 +10,16 @@ import exporter
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
+_REPORT_DATA_KEYS = [
+    "user_detail",
+    "org_summary",
+    "global_summary",
+    "monthly_ratings",
+    "bundle_counts",
+    "fetched_region",
+    "fetched_date_range",
+]
+
 
 def _column_config_for(dataframe, column_config):
     return {
@@ -51,19 +61,25 @@ with st.sidebar:
 
     today = date.today()
 
-    st.markdown("**30-day window**")
-    start_30 = st.date_input("From", today - timedelta(days=30), key="start_30")
-    end_30 = st.date_input("To", today, key="end_30")
-
-    st.markdown("**90-day window**")
-    start_90 = st.date_input("From", today - timedelta(days=90), key="start_90")
-    end_90 = st.date_input("To", today, key="end_90")
+    start_date = st.date_input("From", today - timedelta(days=90), key="start_date")
+    end_date = st.date_input("To", today, key="end_date")
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Pulling last login data may take a few minutes")
 
-date_range_30 = f"{start_30},{end_30}"
-date_range_90 = f"{start_90},{end_90}"
+if start_date > end_date:
+    st.error("'From' date must be on or before 'To' date.")
+    st.stop()
+
+date_range = f"{start_date},{end_date}"
+
+fetched_region = st.session_state.get("fetched_region")
+fetched_date_range = st.session_state.get("fetched_date_range")
+if (fetched_region is not None or fetched_date_range is not None) and (
+    fetched_region != region or fetched_date_range != date_range
+):
+    for key in _REPORT_DATA_KEYS:
+        st.session_state.pop(key, None)
 
 
 # ── data fetching ─────────────────────────────────────────────────────────────
@@ -75,22 +91,19 @@ if pull:
             db_users = database.load_users_and_orgs(region)
             org_user_counts = database.get_org_user_counts(region)
             bundle_counts = database.get_bundle_counts_per_org(region)
-            star_ratings = database.get_star_ratings_by_org(region)
-            monthly_ratings = database.get_monthly_star_ratings(region)
+            star_ratings = database.get_star_ratings_by_org(region, start_date, end_date)
+            monthly_ratings = database.get_monthly_star_ratings(region, start_date, end_date)
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
-            logins_30 = _cached_logins(date_range_30)
-            logins_90 = _cached_logins(date_range_90)
-            sessions_30 = _cached_sessions_delivered(date_range_30)
-            sessions_90 = _cached_sessions_delivered(date_range_90)
-            activity_completions = _cached_activity_completions(date_range_30)
+            logins = _cached_logins(date_range)
+            sessions = _cached_sessions_delivered(date_range)
+            activity_completions = _cached_activity_completions(date_range)
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = sorted(
             set(db_users["user_id"])
-            | set(logins_30["user_id"])
-            | set(logins_90["user_id"])
+            | set(logins["user_id"])
         )
 
         with st.status("Fetching last login dates...", expanded=True) as status:
@@ -109,15 +122,15 @@ if pull:
 
         # Step 4 — Visit durations
         with st.spinner("Fetching session durations..."):
-            visit_durations = _cached_visit_durations(date_range_30)
+            visit_durations = _cached_visit_durations(date_range)
 
         # Step 5 — Build merged DataFrames
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
-                db_users, logins_30, logins_90, last_login, visit_durations, activity_completions,
+                db_users, logins, last_login, visit_durations, activity_completions,
             )
             org_summary = merger.build_org_summary(
-                user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
+                user_detail, sessions, star_ratings, org_user_counts,
             )
             global_summary = merger.build_global_summary(org_summary, bundle_counts)
 
@@ -128,8 +141,8 @@ if pull:
             "monthly_ratings": monthly_ratings,
             "bundle_counts": bundle_counts,
             "region": region,
-            "date_range_30": date_range_30,
-            "date_range_90": date_range_90,
+            "fetched_region": region,
+            "fetched_date_range": date_range,
         })
 
         st.success("Data loaded successfully.")
@@ -160,8 +173,7 @@ else:
             "total_organisations":          "Organisations",
             "total_users":                  "Total Users",
             "total_groups_created":         "Groups Created",
-            "total_sessions_delivered_30":  "Sessions Delivered (30 days)",
-            "total_sessions_delivered_90":  "Sessions Delivered (90 days)",
+            "total_sessions_delivered":     "Sessions Delivered",
             "overall_groups_avg_rating":    "Avg Group Rating",
             "overall_therapists_avg_rating": "Avg Therapist Rating",
         }
@@ -171,9 +183,9 @@ else:
 
         st.divider()
 
-        st.markdown("**Logins by Organisation (30 days)**")
+        st.markdown("**Logins by Organisation**")
         chart_data = (
-            org_summary.set_index("organisation_name")["logins_30_days"]
+            org_summary.set_index("organisation_name")["logins"]
             .sort_values(ascending=False)
         )
         st.bar_chart(chart_data)
@@ -208,14 +220,11 @@ else:
                 "total_users": st.column_config.NumberColumn(
                     help="Total number of registered users in this organisation",
                 ),
-                "active_users_30": st.column_config.NumberColumn(
-                    help="Users with 2 or more logins in the 30-day window",
+                "active_users": st.column_config.NumberColumn(
+                    help="Users with 2 or more logins in the reporting period",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the reporting period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -234,16 +243,9 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
-                "sessions_delivered_30_days": st.column_config.NumberColumn(
+                "sessions_delivered": st.column_config.NumberColumn(
                     help=(
-                        "Unique CST therapy sessions delivered in the 30-day window — counted as "
-                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
-                        "Different unit from visit-based duration metrics."
-                    ),
-                ),
-                "sessions_delivered_90_days": st.column_config.NumberColumn(
-                    help=(
-                        "Unique CST therapy sessions delivered in the 90-day window — counted as "
+                        "Unique CST therapy sessions delivered in the reporting period — counted as "
                         "unique (bundle + session ID) pairs with at least one deliver-mode action. "
                         "Different unit from visit-based duration metrics."
                     ),
@@ -289,11 +291,8 @@ else:
                 "last_login_date": st.column_config.TextColumn(
                     help="Most recent recorded Matomo visit date",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the reporting period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -329,8 +328,7 @@ if "user_detail" in st.session_state:
         st.session_state["org_summary"],
         st.session_state["monthly_ratings"],
         st.session_state["region"],
-        st.session_state["date_range_30"],
-        st.session_state["date_range_90"],
+        st.session_state["fetched_date_range"],
     )
     st.download_button(
         label="Download Excel Report",
