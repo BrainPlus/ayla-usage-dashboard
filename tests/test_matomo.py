@@ -20,8 +20,9 @@ import matomo
         "get_activity_usage_by_id",
     ],
 )
-def test_live_visit_queries_apply_integer_organisation_segment(
-    monkeypatch, function_name
+@pytest.mark.parametrize("org_id", [196, None, "unassigned"])
+def test_live_visit_queries_never_apply_organisation_segment(
+    monkeypatch, function_name, org_id
 ) -> None:
     captured = {}
 
@@ -31,24 +32,7 @@ def test_live_visit_queries_apply_integer_organisation_segment(
 
     monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
 
-    getattr(matomo, function_name)("2026-01-01,2026-01-31", org_id=196)
-
-    assert captured["params"]["segment"] == "dimension13==196"
-
-
-@pytest.mark.parametrize("org_id", [None, "unassigned"])
-def test_live_visit_queries_omit_organisation_segment_without_integer_org(
-    monkeypatch, org_id
-) -> None:
-    captured = {}
-
-    def fake_fetch(params, page_size=5000):
-        captured["params"] = params
-        return []
-
-    monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
-
-    matomo.get_sessions_delivered("2026-01-01,2026-01-31", org_id=org_id)
+    getattr(matomo, function_name)("2026-01-01,2026-01-31", org_id=org_id)
 
     assert "segment" not in captured["params"]
 

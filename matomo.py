@@ -1,5 +1,6 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
-# ALWAYS include segment=customDimension10==false for session/activity/step event queries.
+# Deliver-mode filtering checks dimension10 on fetched actions in Python; do not
+# apply customDimension10 or dimension13 as source-side Matomo segments.
 
 import io
 from datetime import date, timedelta
@@ -9,6 +10,9 @@ import requests
 import streamlit as st
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+
+# Keep org_id on bulk-query signatures for caller/cache compatibility. Do not
+# send dimension13 as a source segment: production checks found 56-78% undercounting.
 
 
 def _base_params() -> dict:
@@ -53,12 +57,6 @@ def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
             break  # partial page → last page
         offset += len(data)
     return all_visits
-
-
-def _organisation_segment(org_id) -> dict:
-    if isinstance(org_id, int):
-        return {"segment": f"dimension13=={org_id}"}
-    return {}
 
 
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
@@ -163,7 +161,6 @@ def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -215,7 +212,6 @@ def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -257,7 +253,6 @@ def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFr
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -309,7 +304,6 @@ def get_activity_usage_by_id(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         },
         page_size=10000,
     )

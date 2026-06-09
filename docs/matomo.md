@@ -14,7 +14,7 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 **Returns:** `list` of visit dicts (all pages concatenated). Raises `RuntimeError` if any page returns a non-list, preventing API errors or partial results from being reported as empty data.
 
-**Notes:** Replaces the previous single-call approach with pagination. All four bulk `Live.getLastVisitsDetails` functions call this helper and add `segment=dimension13=={org_id}` when a specific organisation is selected.
+**Notes:** Replaces the previous single-call approach with pagination. All four bulk `Live.getLastVisitsDetails` functions call this helper. Organisation scoping is applied by the caller outside this module after fetching, using Matomo user IDs belonging to the selected region and organisation in the database. Source-side `dimension13` segmentation is intentionally disabled because a production comparison found 56–78% undercounting.
 
 ---
 
@@ -84,7 +84,7 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
-- `org_id` *(int, `"unassigned"`, or None)* — integer IDs add a source-side `dimension13` segment
+- `org_id` *(int, `"unassigned"`, or None)* — retained for caller and cache compatibility; no source-side organisation segment is applied
 
 **Returns:** DataFrame with columns:
 - `bundle_id` (str) — DB integer bundle ID from dimension14 (`customBundleId`)
@@ -101,7 +101,7 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
-- `org_id` *(int, `"unassigned"`, or None)* — integer IDs add a source-side `dimension13` segment
+- `org_id` *(int, `"unassigned"`, or None)* — retained for caller and cache compatibility; no source-side organisation segment is applied
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)
