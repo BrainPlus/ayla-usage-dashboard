@@ -10,6 +10,9 @@ import streamlit as st
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
 
+# Keep org_id on bulk-query signatures for caller/cache compatibility. Do not
+# send dimension13 as a source segment: production checks found 56-78% undercounting.
+
 
 def _base_params() -> dict:
     return {
@@ -53,12 +56,6 @@ def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
             break  # partial page → last page
         offset += len(data)
     return all_visits
-
-
-def _organisation_segment(org_id) -> dict:
-    if isinstance(org_id, int):
-        return {"segment": f"dimension13=={org_id}"}
-    return {}
 
 
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
@@ -163,7 +160,6 @@ def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -215,7 +211,6 @@ def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -257,7 +252,6 @@ def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFr
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         }
     )
 
@@ -309,7 +303,6 @@ def get_activity_usage_by_id(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            **_organisation_segment(org_id),
         },
         page_size=10000,
     )
