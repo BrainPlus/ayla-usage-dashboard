@@ -12,23 +12,23 @@ Live app: https://ayla-usage-dashboard.streamlit.app
 
 ### Global Overview
 - Total organisations, users, and groups created
-- Sessions delivered (30-day and 90-day windows)
+- Sessions delivered in the selected reporting period
 - Overall average star ratings (group and therapist)
 - Logins by organisation bar chart
 - Monthly average star rating trend (group vs therapist)
 
 ### By Organisation
-- Total users and active users (2+ logins in 30 days)
-- Logins (30-day and 90-day)
+- Total users and active users (2+ logins in the selected period)
+- Logins in the selected reporting period
 - Average session duration
-- Sessions delivered (30-day and 90-day)
+- Sessions delivered in the selected reporting period
 - Average group and therapist star ratings
 - Last login date
 
 ### By User
 - Email and organisation
 - Last login date
-- Logins (30-day and 90-day)
+- Logins in the selected reporting period
 - Average session duration
 - Activities completed (delivered sessions only)
 - Filter by organisation name

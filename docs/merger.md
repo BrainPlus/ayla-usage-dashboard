@@ -8,14 +8,13 @@ Two sentinel constants are used throughout:
 
 ---
 
-### build_user_detail(db_users, logins_30, logins_90, last_login, visit_durations, activity_completions)
+### build_user_detail(db_users, logins, last_login, visit_durations, activity_completions)
 
 **Purpose:** Builds the per-user detail table by left-joining all Matomo metrics onto the canonical DB user list.
 
 **Parameters:**
 - `db_users` *(DataFrame)* — `user_id`, `email`, `organisation_name` from `database.load_users_and_orgs`
-- `logins_30` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 30-day window
-- `logins_90` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the 90-day window
+- `logins` *(DataFrame)* — `user_id`, `visits` from `matomo.get_logins_by_date_range` for the selected period
 - `last_login` *(DataFrame)* — `user_id`, `last_login_date` from `matomo.get_last_login_per_user`
 - `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations`
 - `activity_completions` *(DataFrame)* — `user_id`, `activities_completed` from `matomo.get_activity_completions_per_user`
@@ -25,8 +24,7 @@ Two sentinel constants are used throughout:
 - `email` (str)
 - `organisation_name` (str)
 - `last_login_date` (str) — `"No tracked usage"` if never seen in Matomo
-- `logins_30_days` (int) — 0 if not in Matomo
-- `logins_90_days` (int) — 0 if not in Matomo
+- `logins` (int) — 0 if not in Matomo
 - `avg_real_session_minutes` (float, 1 decimal) — mean duration of deliver visits >20 min
 - `median_prepare_minutes` (float, 1 decimal) — median duration of prepare-only visits
 - `short_visit_count` (int) — deliver visits ≤20 min
@@ -36,14 +34,13 @@ Two sentinel constants are used throughout:
 
 ---
 
-### build_org_summary(user_detail, sessions_delivered_30, sessions_delivered_90, star_ratings, org_user_counts, visit_durations)
+### build_org_summary(user_detail, sessions_delivered, star_ratings, org_user_counts, visit_durations)
 
 **Purpose:** Builds the per-organisation summary table by aggregating user_detail and joining session, rating, user-count, and raw visit data.
 
 **Parameters:**
 - `user_detail` *(DataFrame)* — output of `build_user_detail`
-- `sessions_delivered_30` *(DataFrame)* — `bundle_id`, `session_id`, `user_id` from `matomo.get_sessions_delivered` for the 30-day window
-- `sessions_delivered_90` *(DataFrame)* — same structure for the 90-day window
+- `sessions_delivered` *(DataFrame)* — `bundle_id`, `session_id`, `user_id` from `matomo.get_sessions_delivered` for the selected period
 - `star_ratings` *(DataFrame)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
 - `org_user_counts` *(DataFrame)* — `organisation_name`, `user_count` from `database.get_org_user_counts`
 - `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations` (raw, not pre-aggregated)
@@ -51,17 +48,15 @@ Two sentinel constants are used throughout:
 **Returns:** DataFrame with columns:
 - `organisation_name` (str)
 - `total_users` (int) — from DB, not Matomo
-- `active_users_30` (int) — users with 2+ logins in the 30-day window
-- `logins_30_days` (int)
-- `logins_90_days` (int)
+- `active_users` (int) — users with 2+ logins in the selected period
+- `logins` (int)
 - `avg_real_session_minutes` (float, 1 decimal) — when raw `visit_durations` are provided: visit-count-weighted mean across all deliver visits >20 min in the org; falls back to mean of per-user averages when `visit_durations` is absent
 - `median_prepare_minutes` (float, 1 decimal) — median of per-user medians, excluding users with 0
 - `min_real_session_minutes` (float, 1 decimal) — shortest individual real session (raw visit >20 min) across all users in the org; 0.0 when `visit_durations` is absent
 - `max_real_session_minutes` (float, 1 decimal) — longest individual real session across all users in the org; 0.0 when `visit_durations` is absent
 - `short_visit_count` (int) — deliver visits ≤20 min across all users in the org
-- `sessions_delivered_30_days` (int)
-- `sessions_delivered_90_days` (int)
-- `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `sessions_delivered_30_days`; 0.0 if no sessions
+- `sessions_delivered` (int)
+- `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `sessions_delivered`; 0.0 if no sessions
 - `last_login_date` (str) — most recent login across all users; `"No tracked usage"` if none
 - `groups_avg_rating` (float, 2 decimal) — 0.0 if no data
 - `therapists_avg_rating` (float, 2 decimal) — 0.0 if no data
@@ -124,8 +119,7 @@ Sorted descending by `Completions` (most used first).
 - `total_organisations` (int) — excludes `"Unassigned / No organisation"`
 - `total_users` (int) — sum across all orgs including unassigned
 - `total_groups_created` (int) — sum from `bundle_counts`
-- `total_sessions_delivered_30` (int)
-- `total_sessions_delivered_90` (int)
+- `total_sessions_delivered` (int)
 - `overall_groups_avg_rating` (float, 2 decimal) — response-weighted mean across all organisations
 - `overall_therapists_avg_rating` (float, 2 decimal) — same
 

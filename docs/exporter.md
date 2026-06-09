@@ -4,7 +4,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 ---
 
-### build_excel_report(user_detail, org_summary, monthly_ratings, region, date_range_30, date_range_90, org_filter_name=None)
+### build_excel_report(user_detail, org_summary, monthly_ratings, region, date_range, activity_usage_table=None, org_filter_name=None)
 
 **Purpose:** Assembles a five-sheet Excel workbook and returns it as bytes ready for download.
 
@@ -13,8 +13,8 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 - `org_summary` *(DataFrame)* — output of `merger.build_org_summary`; written to the "Organisation Summary" sheet
 - `monthly_ratings` *(DataFrame)* — output of `database.get_monthly_star_ratings`; written to the "Monthly Ratings" sheet
 - `region` *(str)* — `"uk"` or `"eu"`; recorded in the Methodology sheet
-- `date_range_30` *(str)* — `"YYYY-MM-DD,YYYY-MM-DD"`; recorded in the Methodology sheet
-- `date_range_90` *(str)* — `"YYYY-MM-DD,YYYY-MM-DD"`; recorded in the Methodology sheet
+- `date_range` *(str)* — `"YYYY-MM-DD,YYYY-MM-DD"`; recorded as the reporting period
+- `activity_usage_table` *(DataFrame or None)* — written to the "Activity Usage" sheet
 - `org_filter_name` *(str or None, default None)* — when set, an "Organisation filter" row is inserted in the Methodology sheet showing the filtered organisation name
 
 **Returns:** `bytes` — the raw content of the `.xlsx` file.
@@ -23,19 +23,18 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 ---
 
-### build_methodology_df(region, date_range_30, date_range_90, org_filter_name=None)
+### build_methodology_df(region, date_range, org_filter_name=None)
 
 **Purpose:** Builds a two-column DataFrame describing every metric in the report, used as the Methodology sheet.
 
 **Parameters:**
 - `region` *(str)* — inserted as the value for the "Region" row
-- `date_range_30` *(str)* — inserted as the value for the "30-day window" row
-- `date_range_90` *(str)* — inserted as the value for the "90-day window" row
+- `date_range` *(str)* — inserted as the value for the "Reporting period" row
 - `org_filter_name` *(str or None, default None)* — when set, an "Organisation filter" row is inserted after the "Region" row
 
 **Returns:** DataFrame with columns `Field` and `Description`, with one row per metric.
 
-**Notes:** Content is hardcoded. Rows cover: Region, 30-day window, 90-day window, data sources, Logins, Active users, Avg session time, Sessions delivered, Last login date, Groups avg rating, Therapists avg rating, Activities completed.
+**Notes:** Content is hardcoded. Rows cover the region, reporting period, optional organisation filter, data sources, and metric definitions.
 
 ---
 

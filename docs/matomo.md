@@ -14,7 +14,7 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 **Returns:** `list` of visit dicts (all pages concatenated). Raises `RuntimeError` if any page returns a non-list, preventing API errors or partial results from being reported as empty data.
 
-**Notes:** Replaces the previous single-call approach with `filter_limit=10000`, which silently discarded visits beyond that threshold for large deployments. All four `Live.getLastVisitsDetails`-based functions (`get_visit_durations`, `get_sessions_delivered`, `get_activity_completions_per_user`, `get_activity_usage_by_id`) call this helper.
+**Notes:** Replaces the previous single-call approach with pagination. All four bulk `Live.getLastVisitsDetails` functions call this helper and add `segment=dimension13=={org_id}` when a specific organisation is selected.
 
 ---
 
@@ -78,12 +78,13 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 ---
 
-### get_sessions_delivered(date_range)
+### get_sessions_delivered(date_range, org_id=None)
 
 **Purpose:** Fetches unique delivered session instances as `(bundle_id, session_id, user_id)` rows.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
+- `org_id` *(int, `"unassigned"`, or None)* — integer IDs add a source-side `dimension13` segment
 
 **Returns:** DataFrame with columns:
 - `bundle_id` (str) — DB integer bundle ID from dimension14 (`customBundleId`)
@@ -94,12 +95,13 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 ---
 
-### get_activity_completions_per_user(date_range)
+### get_activity_completions_per_user(date_range, org_id=None)
 
 **Purpose:** Counts "Activity Complete" events per user in delivered sessions only.
 
 **Parameters:**
 - `date_range` *(str)* — date range in `"YYYY-MM-DD,YYYY-MM-DD"` format.
+- `org_id` *(int, `"unassigned"`, or None)* — integer IDs add a source-side `dimension13` segment
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)

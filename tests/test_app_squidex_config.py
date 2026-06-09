@@ -62,7 +62,7 @@ def test_cached_activity_usage_reloads_stale_matomo_module(monkeypatch) -> None:
     fresh_matomo = ModuleType("matomo")
     fresh_matomo.get_activity_usage_by_id = (
         lambda date_range, allowed_user_ids=None: pd.DataFrame(
-            [{"activity_id": f"usage:{date_range}", "completions": 1}]
+            [{"activity_id": f"usage:{date_range}", "completion_count": 1}]
         )
     )
 
@@ -98,7 +98,7 @@ def test_cached_activity_usage_reloads_stale_one_argument_function(monkeypatch) 
 
     def get_activity_usage_by_id(date_range, allowed_user_ids=None):
         captured["allowed_user_ids"] = allowed_user_ids
-        return pd.DataFrame([{"activity_id": "a1", "completions": 1}])
+        return pd.DataFrame([{"activity_id": "a1", "completion_count": 1}])
 
     fresh_matomo.get_activity_usage_by_id = get_activity_usage_by_id
     monkeypatch.setattr(app, "matomo", stale_matomo)

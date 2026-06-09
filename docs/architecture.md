@@ -43,7 +43,7 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 1. **DB queries** (fast, ~1–2s) — `database.py` runs five SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, star ratings by org, monthly star ratings.
 
-2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` makes four `Live.getLastVisitsDetails` calls: logins for 30-day window, logins for 90-day window, sessions delivered for both windows, and activity completions. One additional `UserId.getUsers` call fetches the login list.
+2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` makes four `Live.getLastVisitsDetails` calls: logins, sessions delivered, visit durations, and activity completions for the selected reporting period. One additional `UserId.getUsers` call fetches the login list.
 
 3. **Last login per user** (slow, ~1–5 min) — one `Live.getLastVisitsDetails` call per user, sequentially. This is the bottleneck. A progress bar is shown. Not cached because caching would skip the progress callback.
 

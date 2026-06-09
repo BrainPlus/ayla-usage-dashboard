@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -66,9 +67,23 @@ def test_database_queries_apply_organisation_filter(
     monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
     monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
 
-    getattr(database, function_name)("eu", org_id=org_id)
+    if function_name in ("get_star_ratings_by_org", "get_monthly_star_ratings"):
+        getattr(database, function_name)(
+            "eu", date(2026, 1, 1), date(2026, 6, 8), org_id=org_id
+        )
+    else:
+        getattr(database, function_name)("eu", org_id=org_id)
 
-    assert captured["params"] == expected_params
+    if function_name in ("get_star_ratings_by_org", "get_monthly_star_ratings"):
+        assert captured["params"] == {
+            "start": date(2026, 1, 1),
+            "end_exclusive": date(2026, 6, 9),
+            **(expected_params or {}),
+        }
+        assert "fa.created_at >= :start" in captured["sql"]
+        assert "fa.created_at < :end_exclusive" in captured["sql"]
+    else:
+        assert captured["params"] == expected_params
     if expected_filter is None:
         assert "u.organisation_id = :org_id" not in captured["sql"]
         assert "u.organisation_id IS NULL" not in captured["sql"]

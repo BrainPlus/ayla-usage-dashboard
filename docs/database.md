@@ -1,6 +1,6 @@
 # database.py — PostgreSQL Query Functions
 
-All functions accept a `region` parameter (`"uk"` or `"eu"`) and return a pandas DataFrame. Connections are managed via SQLAlchemy and closed automatically by the `with engine.connect()` context manager.
+All query functions accept a `region` parameter (`"uk"` or `"eu"`) and return a pandas DataFrame. Data queries also accept optional organisation scoping; star-rating queries additionally receive the selected reporting period.
 
 **Never use `SELECT * FROM bundles`** — the table is large and the query is slow. Always select only the columns needed.
 
@@ -65,12 +65,14 @@ All functions accept a `region` parameter (`"uk"` or `"eu"`) and return a pandas
 
 ---
 
-### get_star_ratings_by_org(region)
+### get_star_ratings_by_org(region, start_date, end_date, org_id=None)
 
 **Purpose:** Calculates average star rating and total response count per organisation and feedback target type.
 
 **Parameters:**
 - `region` *(str)* — `"uk"` or `"eu"`.
+- `start_date`, `end_date` *(date)* — inclusive reporting-period bounds
+- `org_id` *(int, `"unassigned"`, or None)* — optional organisation scope
 
 **Returns:** DataFrame with columns:
 - `organisation_name` (str)
@@ -82,12 +84,14 @@ All functions accept a `region` parameter (`"uk"` or `"eu"`) and return a pandas
 
 ---
 
-### get_monthly_star_ratings(region)
+### get_monthly_star_ratings(region, start_date, end_date, org_id=None)
 
 **Purpose:** Calculates average star ratings broken down by calendar month, organisation, and feedback target.
 
 **Parameters:**
 - `region` *(str)* — `"uk"` or `"eu"`.
+- `start_date`, `end_date` *(date)* — inclusive reporting-period bounds
+- `org_id` *(int, `"unassigned"`, or None)* — optional organisation scope
 
 **Returns:** DataFrame with columns:
 - `month` (str, `"YYYY-MM"`)

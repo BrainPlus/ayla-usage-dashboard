@@ -7,19 +7,17 @@ import pandas as pd
 
 def build_methodology_df(
     region: str,
-    date_range_30: str,
-    date_range_90: str,
+    date_range: str,
     org_filter_name=None,
 ) -> pd.DataFrame:
     """Builds the Methodology sheet content as a two-column DataFrame."""
     rows = [
         ("Region", region),
-        ("30-day window", date_range_30),
-        ("90-day window", date_range_90),
+        ("Reporting period", date_range),
         ("Source of usage data", "Matomo API"),
         ("Source of organisation mapping", "PostgreSQL database"),
         ("Logins", "Number of Matomo visits per user/organisation"),
-        ("Active users", "Users with 2 or more logins in the 30-day window"),
+        ("Active users", "Users with 2 or more logins in the selected period"),
         (
             "Avg real session time",
             "Average duration in minutes for deliver visits longer than 20 minutes",
@@ -46,7 +44,7 @@ def build_methodology_df(
         ),
         (
             "Avg activities per session",
-            "Total Activity Complete events divided by sessions delivered (30-day window). "
+            "Total Activity Complete events divided by sessions delivered in the selected period. "
             "Note: fires on forward navigation — rapid click-through may inflate this count.",
         ),
         ("Last login date", "Most recent recorded Matomo visit date"),
@@ -73,8 +71,7 @@ def build_excel_report(
     org_summary: pd.DataFrame,
     monthly_ratings: pd.DataFrame,
     region: str,
-    date_range_30: str,
-    date_range_90: str,
+    date_range: str,
     activity_usage_table: pd.DataFrame | None = None,
     org_filter_name=None,
 ) -> bytes:
@@ -95,8 +92,7 @@ def build_excel_report(
         org_summary:           output of merger.build_org_summary
         monthly_ratings:       output of database.get_monthly_star_ratings
         region:                "uk" or "eu"
-        date_range_30:         "YYYY-MM-DD,YYYY-MM-DD" for the 30-day window
-        date_range_90:         "YYYY-MM-DD,YYYY-MM-DD" for the 90-day window
+        date_range:            "YYYY-MM-DD,YYYY-MM-DD" for the reporting period
         activity_usage_table:  output of merger.build_activity_usage_table (optional)
 
     Returns:
@@ -105,9 +101,7 @@ def build_excel_report(
     if activity_usage_table is None:
         activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
 
-    methodology = build_methodology_df(
-        region, date_range_30, date_range_90, org_filter_name=org_filter_name
-    )
+    methodology = build_methodology_df(region, date_range, org_filter_name=org_filter_name)
 
     sheets = [
         ("Organisation Summary", org_summary),

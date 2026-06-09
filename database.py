@@ -1,6 +1,8 @@
 # All PostgreSQL queries: users, organisations, bundles, feedback_questions, feedback_answers.
 # Never use SELECT * FROM bundles — always write targeted queries.
 
+from datetime import date, timedelta
+
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
@@ -131,7 +133,12 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
-def get_star_ratings_by_org(region: str, org_id=None) -> pd.DataFrame:
+def get_star_ratings_by_org(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
     """
     Calculates average star rating and response count per organisation and feedback target.
 
@@ -143,7 +150,12 @@ def get_star_ratings_by_org(region: str, org_id=None) -> pd.DataFrame:
     Returns columns:
         organisation_name (str), target (str), avg_rating (float), total_responses (int)
     """
-    filter_sql, params = _organisation_filter(org_id, prefix="AND")
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
     sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
@@ -155,7 +167,7 @@ def get_star_ratings_by_org(region: str, org_id=None) -> pd.DataFrame:
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
-        WHERE TRUE
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         {filter_sql}
         GROUP BY COALESCE(o.name, 'Unassigned / No organisation'), fq.target
         ORDER BY COALESCE(o.name, 'Unassigned / No organisation')
@@ -166,7 +178,12 @@ def get_star_ratings_by_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
-def get_monthly_star_ratings(region: str, org_id=None) -> pd.DataFrame:
+def get_monthly_star_ratings(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
     """
     Calculates average star rating per month, organisation, and feedback target.
 
@@ -178,7 +195,12 @@ def get_monthly_star_ratings(region: str, org_id=None) -> pd.DataFrame:
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
-    filter_sql, params = _organisation_filter(org_id, prefix="AND")
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
     sql = text(f"""
         SELECT
             TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
@@ -191,7 +213,7 @@ def get_monthly_star_ratings(region: str, org_id=None) -> pd.DataFrame:
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
-        WHERE TRUE
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         {filter_sql}
         GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'), fq.target
         ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation')

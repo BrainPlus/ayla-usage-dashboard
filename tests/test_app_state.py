@@ -45,26 +45,17 @@ def test_should_clear_report(monkeypatch) -> None:
     app = _import_app(monkeypatch)
 
     assert not app._should_clear_report({}, "eu", None, "range")
-    assert not app._should_clear_report(
-        {
-            "fetched_region": "eu",
-            "fetched_org_id": 196,
-            "fetched_date_range": "range",
-        },
-        "eu",
-        196,
-        "range",
-    )
-    assert app._should_clear_report(
-        {
-            "fetched_region": "eu",
-            "fetched_org_id": 196,
-            "fetched_date_range": "range",
-        },
-        "eu",
-        "unassigned",
-        "range",
-    )
+    loaded = {
+        "global_summary": {},
+        "fetched_region": "eu",
+        "fetched_org_id": 196,
+        "fetched_date_range": "range",
+    }
+    assert not app._should_clear_report(loaded, "eu", 196, "range")
+    assert app._should_clear_report(loaded, "uk", 196, "range")
+    assert app._should_clear_report(loaded, "eu", "unassigned", "range")
+    assert app._should_clear_report(loaded, "eu", 196, "different-range")
+    assert app._should_clear_report({"global_summary": {}}, "eu", None, "range")
 
 
 def test_filter_to_org_users(monkeypatch) -> None:
@@ -74,6 +65,8 @@ def test_filter_to_org_users(monkeypatch) -> None:
     result = app._filter_to_org_users(df, {"u2"})
 
     assert result.to_dict("records") == [{"user_id": "u2"}]
+    without_user_ids = pd.DataFrame([{"activity_id": "a1"}])
+    assert app._filter_to_org_users(without_user_ids, {"u2"}).equals(without_user_ids)
 
 
 def test_last_login_user_ids(monkeypatch) -> None:

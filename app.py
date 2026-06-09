@@ -25,8 +25,7 @@ _REPORT_DATA_KEYS = (
     "activity_catalogue",
     "activity_usage",
     "region",
-    "date_range_30",
-    "date_range_90",
+    "date_range",
     "fetched_region",
     "fetched_org_id",
     "fetched_org_name",
@@ -50,16 +49,20 @@ def _column_config_for(dataframe, column_config):
 def _get_activity_usage_by_id(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
 ):
     # commit 18d5df5: reload matomo if the function or its new argument was added
     # after the cached import.
     global matomo
     if (
         not hasattr(matomo, "get_activity_usage_by_id")
-        or len(inspect.signature(matomo.get_activity_usage_by_id).parameters) < 2
+        or len(inspect.signature(matomo.get_activity_usage_by_id).parameters) < 3
     ):
         matomo = importlib.reload(matomo)
-    if len(inspect.signature(matomo.get_activity_usage_by_id).parameters) >= 2:
+    parameter_count = len(inspect.signature(matomo.get_activity_usage_by_id).parameters)
+    if parameter_count >= 3:
+        return matomo.get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
+    if parameter_count >= 2:
         return matomo.get_activity_usage_by_id(date_range, allowed_user_ids)
     return matomo.get_activity_usage_by_id(date_range)
 
@@ -135,11 +138,14 @@ def _should_clear_report(
     current_org_id,
     current_date_range: str,
 ) -> bool:
+    if not any(
+        key in session_state
+        for key in ("user_detail", "org_summary", "global_summary")
+    ):
+        return False
     fetched_region = session_state.get("fetched_region")
     fetched_org_id = session_state.get("fetched_org_id")
     fetched_date_range = session_state.get("fetched_date_range")
-    if fetched_region is None and fetched_org_id is None and fetched_date_range is None:
-        return False
     return (
         fetched_region != current_region
         or fetched_org_id != current_org_id
@@ -174,13 +180,13 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_sessions_delivered(date_range: str):
-    return matomo.get_sessions_delivered(date_range)
+def _cached_sessions_delivered(date_range: str, region: str, org_id):
+    return matomo.get_sessions_delivered(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
-def _cached_activity_completions(date_range: str):
-    return matomo.get_activity_completions_per_user(date_range)
+def _cached_activity_completions(date_range: str, region: str, org_id):
+    return matomo.get_activity_completions_per_user(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -204,13 +210,12 @@ def _cached_activity_usage(
     org_id,
     allowed_user_ids: frozenset[str] | None,
 ):
-    usage = _get_activity_usage_by_id(date_range, allowed_user_ids)
-    return usage.rename(columns={"completions": "completion_count"})
+    return _get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
 
 
 @st.cache_data(ttl=3600)
-def _cached_visit_durations(date_range: str):
-    return matomo.get_visit_durations(date_range)
+def _cached_visit_durations(date_range: str, region: str, org_id):
+    return matomo.get_visit_durations(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -248,21 +253,18 @@ with st.sidebar:
 
     today = date.today()
 
-    st.markdown("**30-day window**")
-    start_30 = st.date_input("From", today - timedelta(days=30), key="start_30")
-    end_30 = st.date_input("To", today, key="end_30")
-
-    st.markdown("**90-day window**")
-    start_90 = st.date_input("From", today - timedelta(days=90), key="start_90")
-    end_90 = st.date_input("To", today, key="end_90")
+    start_date = st.date_input("From", today - timedelta(days=90), key="start_date")
+    end_date = st.date_input("To", today, key="end_date")
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Pulling last login data may take a few minutes")
     st.caption(f"Deployment revision: {APP_REVISION}")
 
-date_range_30 = f"{start_30},{end_30}"
-date_range_90 = f"{start_90},{end_90}"
-date_range = f"{date_range_30}|{date_range_90}"
+if start_date > end_date:
+    st.error("'From' date must be on or before 'To' date.")
+    st.stop()
+
+date_range = f"{start_date},{end_date}"
 
 if _should_clear_report(st.session_state, region, selected_org_id, date_range):
     for key in _REPORT_DATA_KEYS:
@@ -277,16 +279,20 @@ if pull:
             db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
             org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
             bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
-            star_ratings = database.get_star_ratings_by_org(region, org_id=selected_org_id)
-            monthly_ratings = database.get_monthly_star_ratings(region, org_id=selected_org_id)
+            star_ratings = database.get_star_ratings_by_org(
+                region, start_date, end_date, org_id=selected_org_id
+            )
+            monthly_ratings = database.get_monthly_star_ratings(
+                region, start_date, end_date, org_id=selected_org_id
+            )
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
-            logins_30 = _cached_logins(date_range_30)
-            logins_90 = _cached_logins(date_range_90)
-            sessions_30 = _cached_sessions_delivered(date_range_30)
-            sessions_90 = _cached_sessions_delivered(date_range_90)
-            activity_completions = _cached_activity_completions(date_range_30)
+            logins = _cached_logins(date_range)
+            sessions = _cached_sessions_delivered(date_range, region, selected_org_id)
+            activity_completions = _cached_activity_completions(
+                date_range, region, selected_org_id
+            )
             activity_catalogue = _cached_activity_catalogue()
             allowed_user_ids = (
                 frozenset(db_users["user_id"].astype(str))
@@ -294,16 +300,16 @@ if pull:
                 else None
             )
             activity_usage = _cached_activity_usage(
-                date_range_30, region, selected_org_id, allowed_user_ids
+                date_range, region, selected_org_id, allowed_user_ids
             )
-            visit_durations = _cached_visit_durations(date_range_30)
+            visit_durations = _cached_visit_durations(
+                date_range, region, selected_org_id
+            )
 
         if selected_org_id is not None:
             org_user_ids = set(db_users["user_id"].astype(str))
-            logins_30 = _filter_to_org_users(logins_30, org_user_ids)
-            logins_90 = _filter_to_org_users(logins_90, org_user_ids)
-            sessions_30 = _filter_to_org_users(sessions_30, org_user_ids)
-            sessions_90 = _filter_to_org_users(sessions_90, org_user_ids)
+            logins = _filter_to_org_users(logins, org_user_ids)
+            sessions = _filter_to_org_users(sessions, org_user_ids)
             activity_completions = _filter_to_org_users(
                 activity_completions, org_user_ids
             )
@@ -312,7 +318,7 @@ if pull:
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(
             db_users,
-            pd.concat([logins_30, logins_90], ignore_index=True),
+            logins,
             selected_org_id,
         )
 
@@ -333,10 +339,10 @@ if pull:
         # Step 4 — Build merged DataFrames
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
-                db_users, logins_30, logins_90, last_login, visit_durations, activity_completions,
+                db_users, logins, last_login, visit_durations, activity_completions,
             )
             org_summary = merger.build_org_summary(
-                user_detail, sessions_30, sessions_90, star_ratings, org_user_counts,
+                user_detail, sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
             global_summary = _build_global_summary(
@@ -352,8 +358,7 @@ if pull:
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
             "region": region,
-            "date_range_30": date_range_30,
-            "date_range_90": date_range_90,
+            "date_range": date_range,
             "fetched_region": region,
             "fetched_org_id": selected_org_id,
             "fetched_org_name": selected_org_name,
@@ -385,7 +390,7 @@ else:
         fetched_org_name = st.session_state.get(
             "fetched_org_name", "All organisations"
         )
-        st.subheader(f"Global Overview — {fetched_org_name}")
+        st.subheader(f"Overview — {fetched_org_name}")
         if st.session_state.get("fetched_org_id") is not None:
             st.info(f"Showing data for {fetched_org_name} only.")
 
@@ -393,8 +398,7 @@ else:
             "total_organisations":          "Organisations",
             "total_users":                  "Total Users",
             "total_groups_created":         "Groups Created",
-            "total_sessions_delivered_30":  "Sessions Delivered (30 days)",
-            "total_sessions_delivered_90":  "Sessions Delivered (90 days)",
+            "total_sessions_delivered":     "Sessions Delivered",
             "overall_groups_avg_rating":    "Avg Group Rating",
             "overall_therapists_avg_rating": "Avg Therapist Rating",
         }
@@ -404,9 +408,9 @@ else:
 
         st.divider()
 
-        st.markdown("**Logins by Organisation (30 days)**")
+        st.markdown("**Logins by Organisation**")
         chart_data = (
-            org_summary.set_index("organisation_name")["logins_30_days"]
+            org_summary.set_index("organisation_name")["logins"]
             .sort_values(ascending=False)
         )
         st.bar_chart(chart_data)
@@ -427,7 +431,7 @@ else:
             st.info("No monthly rating data available.")
 
         st.divider()
-        st.subheader("Activity Usage (last 30 days)")
+        st.subheader("Activity Usage")
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
             _activity_catalogue = st.session_state.get("activity_catalogue", {})
@@ -500,14 +504,11 @@ else:
                 "total_users": st.column_config.NumberColumn(
                     help="Total number of registered users in this organisation",
                 ),
-                "active_users_30": st.column_config.NumberColumn(
-                    help="Users with 2 or more logins in the 30-day window",
+                "active_users": st.column_config.NumberColumn(
+                    help="Users with 2 or more logins in the selected period",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the selected period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -534,24 +535,17 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
-                "sessions_delivered_30_days": st.column_config.NumberColumn(
+                "sessions_delivered": st.column_config.NumberColumn(
                     help=(
-                        "Unique CST therapy sessions delivered in the 30-day window — counted as "
-                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
-                        "Different unit from visit-based duration metrics."
-                    ),
-                ),
-                "sessions_delivered_90_days": st.column_config.NumberColumn(
-                    help=(
-                        "Unique CST therapy sessions delivered in the 90-day window — counted as "
+                        "Unique CST therapy sessions delivered in the selected period — counted as "
                         "unique (bundle + session ID) pairs with at least one deliver-mode action. "
                         "Different unit from visit-based duration metrics."
                     ),
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(
-                        "Total Activity Complete events (30-day window) divided by sessions "
-                        "delivered (30-day window). Note: the Activity Complete event fires on "
+                        "Total Activity Complete events divided by sessions delivered in the "
+                        "selected period. Note: the Activity Complete event fires on "
                         "forward navigation, so rapid click-through may inflate this count."
                     ),
                     format="%.1f",
@@ -597,11 +591,8 @@ else:
                 "last_login_date": st.column_config.TextColumn(
                     help="Most recent recorded Matomo visit date",
                 ),
-                "logins_30_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 30-day window",
-                ),
-                "logins_90_days": st.column_config.NumberColumn(
-                    help="Number of Matomo visits (browser sessions) in the 90-day window",
+                "logins": st.column_config.NumberColumn(
+                    help="Number of Matomo visits (browser sessions) in the selected period",
                 ),
                 "avg_real_session_minutes": st.column_config.NumberColumn(
                     help=(
@@ -643,8 +634,7 @@ if "user_detail" in st.session_state:
         st.session_state["org_summary"],
         st.session_state["monthly_ratings"],
         st.session_state["region"],
-        st.session_state["date_range_30"],
-        st.session_state["date_range_90"],
+        st.session_state["date_range"],
         activity_usage_table=merger.build_activity_usage_table(
             _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
