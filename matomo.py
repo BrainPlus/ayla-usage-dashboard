@@ -1,5 +1,6 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
-# ALWAYS include segment=customDimension10==false for session/activity/step event queries.
+# Deliver-mode filtering checks dimension10 on fetched actions in Python; do not
+# apply customDimension10 or dimension13 as source-side Matomo segments.
 
 import io
 from datetime import date, timedelta
