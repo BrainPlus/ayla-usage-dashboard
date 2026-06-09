@@ -28,6 +28,7 @@ def test_methodology_includes_organisation_filter_when_selected() -> None:
     row = methodology[methodology["Field"] == "Organisation filter"]
 
     assert row.iloc[0]["Description"] == "Org A"
+    assert methodology["Field"].iloc[:2].tolist() == ["Region", "Organisation filter"]
 
 
 def test_methodology_omits_organisation_filter_for_all_organisations() -> None:

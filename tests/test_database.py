@@ -94,3 +94,21 @@ def test_get_organisations_orders_by_name(monkeypatch) -> None:
     assert "name AS organisation_name" in captured["sql"]
     assert "ORDER BY name" in captured["sql"]
     assert result.iloc[0]["organisation_id"] == 196
+
+
+def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_bundle_counts_per_org("eu")
+
+    assert "GROUP BY organisation_name" in captured["sql"]
+    assert "ORDER BY organisation_name" in captured["sql"]

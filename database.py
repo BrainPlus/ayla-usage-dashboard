@@ -122,8 +122,8 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
         JOIN users u ON u.id = b.user_id
         LEFT JOIN organisations o ON o.id = u.organisation_id
         {filter_sql}
-        GROUP BY o.name
-        ORDER BY o.name
+        GROUP BY organisation_name
+        ORDER BY organisation_name
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn, params=params)

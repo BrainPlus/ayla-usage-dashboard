@@ -6,7 +6,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 ### build_excel_report(user_detail, org_summary, monthly_ratings, region, date_range_30, date_range_90, org_filter_name=None)
 
-**Purpose:** Assembles a four-sheet Excel workbook and returns it as bytes ready for download.
+**Purpose:** Assembles a five-sheet Excel workbook and returns it as bytes ready for download.
 
 **Parameters:**
 - `user_detail` *(DataFrame)* — output of `merger.build_user_detail`; written to the "User Detail" sheet
@@ -19,7 +19,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 **Returns:** `bytes` — the raw content of the `.xlsx` file.
 
-**Notes:** Uses `pandas.ExcelWriter` with the `openpyxl` engine writing to a `BytesIO` buffer. `buffer.getvalue()` is called after the `with` block closes the writer, which is important because openpyxl does not flush all content until `__exit__` runs. Sheet order is fixed: Organisation Summary → User Detail → Monthly Ratings → Methodology. All sheets have auto-sized columns via `_autosize_columns`.
+**Notes:** Uses `pandas.ExcelWriter` with the `openpyxl` engine writing to a `BytesIO` buffer. `buffer.getvalue()` is called after the `with` block closes the writer, which is important because openpyxl does not flush all content until `__exit__` runs. Sheet order is fixed: Organisation Summary → User Detail → Monthly Ratings → Activity Usage → Methodology. All sheets have auto-sized columns via `_autosize_columns`.
 
 ---
 

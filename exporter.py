@@ -64,7 +64,7 @@ def build_methodology_df(
         ),
     ]
     if org_filter_name is not None:
-        rows.insert(3, ("Organisation filter", org_filter_name))
+        rows.insert(1, ("Organisation filter", org_filter_name))
     return pd.DataFrame(rows, columns=["Field", "Description"])
 
 

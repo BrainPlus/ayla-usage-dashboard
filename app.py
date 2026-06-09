@@ -51,11 +51,17 @@ def _get_activity_usage_by_id(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
 ):
-    # commit 18d5df5: reload matomo if the function was added after the cached import
+    # commit 18d5df5: reload matomo if the function or its new argument was added
+    # after the cached import.
     global matomo
-    if not hasattr(matomo, "get_activity_usage_by_id"):
+    if (
+        not hasattr(matomo, "get_activity_usage_by_id")
+        or len(inspect.signature(matomo.get_activity_usage_by_id).parameters) < 2
+    ):
         matomo = importlib.reload(matomo)
-    return matomo.get_activity_usage_by_id(date_range, allowed_user_ids)
+    if len(inspect.signature(matomo.get_activity_usage_by_id).parameters) >= 2:
+        return matomo.get_activity_usage_by_id(date_range, allowed_user_ids)
+    return matomo.get_activity_usage_by_id(date_range)
 
 
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
