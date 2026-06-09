@@ -273,36 +273,45 @@ def get_activity_completions_per_user(date_range: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["user_id", "activities_completed"])
 
 
-def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
+def get_activity_usage_by_id(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+) -> pd.DataFrame:
     """
-    Counts Activity Complete events per activityId and language in delivered sessions only.
+    Counts Activity Complete events per activityId in delivered sessions only.
 
     Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
     Counts actions where type="event", eventCategory="Activity",
     eventAction="Activity Complete", AND dimension10=="false" (deliver mode only).
     activityId comes from dimension6.
-    language comes from dimension2.
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
 
     Returns:
-        DataFrame with columns: activity_id (str), language (str), completion_count (int)
+        DataFrame with columns: activity_id (str), completions (int)
     """
-    empty = pd.DataFrame(columns=["activity_id", "language", "completion_count"])
+    empty = pd.DataFrame(columns=["activity_id", "completions"])
     data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-        }
+        },
+        page_size=10000,
     )
 
     if not data:
         return empty
 
-    counts: dict[tuple[str, str], int] = {}
+    counts: dict[str, int] = {}
     for visit in data:
+        if (
+            allowed_user_ids is not None
+            and str(visit.get("userId", "")) not in allowed_user_ids
+        ):
+            continue
         for action in visit.get("actionDetails", []):
             if (
                 _extract_dimension(action, "10") == "false"
@@ -312,21 +321,18 @@ def get_activity_usage_by_id(date_range: str) -> pd.DataFrame:
             ):
                 activity_id = _extract_dimension(action, "6")
                 if activity_id:
-                    language = _extract_dimension(action, "2")
-                    key = (activity_id, language)
-                    counts[key] = counts.get(key, 0) + 1
+                    counts[activity_id] = counts.get(activity_id, 0) + 1
 
     if not counts:
         return empty
     df = pd.DataFrame(
         [
-            {"activity_id": activity_id, "language": language, "completion_count": count}
-            for (activity_id, language), count in counts.items()
+            {"activity_id": activity_id, "completions": count}
+            for activity_id, count in counts.items()
         ]
     )
     df["activity_id"] = df["activity_id"].astype(str)
-    df["language"] = df["language"].astype(str)
-    df["completion_count"] = df["completion_count"].astype(int)
+    df["completions"] = df["completions"].astype(int)
     return df
 
 

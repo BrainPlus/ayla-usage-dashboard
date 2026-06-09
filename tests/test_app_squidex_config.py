@@ -2,6 +2,10 @@ import importlib
 import sys
 from types import ModuleType
 
+import pandas as pd
+
+import database
+
 
 class _Context:
     def __enter__(self):
@@ -32,6 +36,11 @@ def _streamlit_stub() -> ModuleType:
 
 def test_cached_activity_catalogue_returns_empty_when_squidex_secrets_are_missing(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
+    monkeypatch.setattr(
+        database,
+        "get_organisations",
+        lambda region: pd.DataFrame(columns=["organisation_id", "organisation_name"]),
+    )
     sys.modules.pop("app", None)
 
     app = importlib.import_module("app")
@@ -41,24 +50,44 @@ def test_cached_activity_catalogue_returns_empty_when_squidex_secrets_are_missin
 
 def test_cached_activity_usage_reloads_stale_matomo_module(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
+    monkeypatch.setattr(
+        database,
+        "get_organisations",
+        lambda region: pd.DataFrame(columns=["organisation_id", "organisation_name"]),
+    )
     sys.modules.pop("app", None)
 
     app = importlib.import_module("app")
     stale_matomo = ModuleType("matomo")
     fresh_matomo = ModuleType("matomo")
-    fresh_matomo.get_activity_usage_by_id = lambda date_range: f"usage:{date_range}"
+    fresh_matomo.get_activity_usage_by_id = (
+        lambda date_range, allowed_user_ids=None: pd.DataFrame(
+            [{"activity_id": f"usage:{date_range}", "completions": 1}]
+        )
+    )
 
     monkeypatch.setattr(app, "matomo", stale_matomo)
     monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_matomo)
 
-    assert app._cached_activity_usage("2026-01-01,2026-01-31") == (
-        "usage:2026-01-01,2026-01-31"
+    result = app._cached_activity_usage(
+        "2026-01-01,2026-01-31", "eu", 196, frozenset({"u1"})
     )
+    assert result.to_dict("records") == [
+        {
+            "activity_id": "usage:2026-01-01,2026-01-31",
+            "completion_count": 1,
+        }
+    ]
     assert app.matomo is fresh_matomo
 
 
 def test_global_summary_supports_stale_two_argument_merger_module(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "streamlit", _streamlit_stub())
+    monkeypatch.setattr(
+        database,
+        "get_organisations",
+        lambda region: pd.DataFrame(columns=["organisation_id", "organisation_name"]),
+    )
     sys.modules.pop("app", None)
 
     app = importlib.import_module("app")

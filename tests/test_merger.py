@@ -682,6 +682,31 @@ def test_global_summary_weights_ratings_by_response_count() -> None:
     assert result["overall_therapists_avg_rating"] == 2.5
 
 
+def test_global_summary_with_single_organisation_input() -> None:
+    org_summary = pd.DataFrame(
+        [
+            {
+                "organisation_name": "Org A",
+                "total_users": 3,
+                "sessions_delivered_30_days": 4,
+                "sessions_delivered_90_days": 7,
+            }
+        ]
+    )
+
+    result = merger.build_global_summary(
+        org_summary,
+        pd.DataFrame([{"organisation_name": "Org A", "total_groups": 2}]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+    )
+
+    assert result["total_organisations"] == 1
+    assert result["total_users"] == 3
+    assert result["total_groups_created"] == 2
+    assert result["total_sessions_delivered_30"] == 4
+    assert result["total_sessions_delivered_90"] == 7
+
+
 def test_global_summary_falls_back_to_org_averages_without_star_ratings() -> None:
     org_summary = pd.DataFrame(
         [

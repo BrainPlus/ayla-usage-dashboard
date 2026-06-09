@@ -5,7 +5,12 @@ import io
 import pandas as pd
 
 
-def build_methodology_df(region: str, date_range_30: str, date_range_90: str) -> pd.DataFrame:
+def build_methodology_df(
+    region: str,
+    date_range_30: str,
+    date_range_90: str,
+    org_filter_name=None,
+) -> pd.DataFrame:
     """Builds the Methodology sheet content as a two-column DataFrame."""
     rows = [
         ("Region", region),
@@ -58,6 +63,8 @@ def build_methodology_df(region: str, date_range_30: str, date_range_90: str) ->
             "Count of Activity Complete events in Matomo (delivered sessions only)",
         ),
     ]
+    if org_filter_name is not None:
+        rows.insert(3, ("Organisation filter", org_filter_name))
     return pd.DataFrame(rows, columns=["Field", "Description"])
 
 
@@ -69,6 +76,7 @@ def build_excel_report(
     date_range_30: str,
     date_range_90: str,
     activity_usage_table: pd.DataFrame | None = None,
+    org_filter_name=None,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
@@ -97,7 +105,9 @@ def build_excel_report(
     if activity_usage_table is None:
         activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
 
-    methodology = build_methodology_df(region, date_range_30, date_range_90)
+    methodology = build_methodology_df(
+        region, date_range_30, date_range_90, org_filter_name=org_filter_name
+    )
 
     sheets = [
         ("Organisation Summary", org_summary),

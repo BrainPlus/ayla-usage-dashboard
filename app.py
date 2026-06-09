@@ -16,6 +16,23 @@ APP_REVISION = "2026-06-08-global-summary-compat-v2"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
+_REPORT_DATA_KEYS = (
+    "user_detail",
+    "org_summary",
+    "global_summary",
+    "monthly_ratings",
+    "bundle_counts",
+    "activity_catalogue",
+    "activity_usage",
+    "region",
+    "date_range_30",
+    "date_range_90",
+    "fetched_region",
+    "fetched_org_id",
+    "fetched_org_name",
+    "fetched_date_range",
+)
+
 
 def _column_config_for(dataframe, column_config):
     return {
@@ -30,12 +47,15 @@ def _column_config_for(dataframe, column_config):
 # Stale cached module objects may lack new functions or accept fewer arguments.
 # Commits 18d5df5, c814074, 44be948 document when each guard was needed.
 
-def _get_activity_usage_by_id(date_range: str):
+def _get_activity_usage_by_id(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+):
     # commit 18d5df5: reload matomo if the function was added after the cached import
     global matomo
     if not hasattr(matomo, "get_activity_usage_by_id"):
         matomo = importlib.reload(matomo)
-    return matomo.get_activity_usage_by_id(date_range)
+    return matomo.get_activity_usage_by_id(date_range, allowed_user_ids)
 
 
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
@@ -103,6 +123,42 @@ def _weighted_rating_average(star_ratings, target):
     return round(float(weighted_total / ratings["total_responses"].sum()), 2)
 
 
+def _should_clear_report(
+    session_state: dict,
+    current_region: str,
+    current_org_id,
+    current_date_range: str,
+) -> bool:
+    fetched_region = session_state.get("fetched_region")
+    fetched_org_id = session_state.get("fetched_org_id")
+    fetched_date_range = session_state.get("fetched_date_range")
+    if fetched_region is None and fetched_org_id is None and fetched_date_range is None:
+        return False
+    return (
+        fetched_region != current_region
+        or fetched_org_id != current_org_id
+        or fetched_date_range != current_date_range
+    )
+
+
+def _filter_to_org_users(df: pd.DataFrame, org_user_ids: set[str]) -> pd.DataFrame:
+    if "user_id" not in df.columns:
+        return df
+    return df[df["user_id"].isin(org_user_ids)].reset_index(drop=True)
+
+
+def _last_login_user_ids(
+    db_users: pd.DataFrame,
+    logins: pd.DataFrame,
+    selected_org_id,
+) -> list[str]:
+    if selected_org_id is not None:
+        return sorted(set(db_users["user_id"].astype(str)))
+    return sorted(
+        set(db_users["user_id"].astype(str)) | set(logins["user_id"].astype(str))
+    )
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -136,13 +192,24 @@ def _cached_activity_catalogue() -> dict:
 
 
 @st.cache_data(ttl=3600)
-def _cached_activity_usage(date_range: str):
-    return _get_activity_usage_by_id(date_range)
+def _cached_activity_usage(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    usage = _get_activity_usage_by_id(date_range, allowed_user_ids)
+    return usage.rename(columns={"completions": "completion_count"})
 
 
 @st.cache_data(ttl=3600)
 def _cached_visit_durations(date_range: str):
     return matomo.get_visit_durations(date_range)
+
+
+@st.cache_data(ttl=3600)
+def _cached_organisations(region: str) -> pd.DataFrame:
+    return database.get_organisations(region)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -151,6 +218,27 @@ with st.sidebar:
     st.title("Ayla Usage Dashboard")
 
     region = st.selectbox("Region", ["eu", "uk"])
+
+    orgs_df = _cached_organisations(region)
+    org_options = (
+        ["All organisations"]
+        + orgs_df["organisation_name"].tolist()
+        + ["Unassigned / No organisation"]
+    )
+    selected_org_name = st.selectbox(
+        "Organisation", org_options, key=f"org_selector_{region}"
+    )
+    if selected_org_name == "All organisations":
+        selected_org_id = None
+    elif selected_org_name == "Unassigned / No organisation":
+        selected_org_id = "unassigned"
+    else:
+        selected_org_id = int(
+            orgs_df.loc[
+                orgs_df["organisation_name"] == selected_org_name,
+                "organisation_id",
+            ].iloc[0]
+        )
 
     today = date.today()
 
@@ -168,7 +256,11 @@ with st.sidebar:
 
 date_range_30 = f"{start_30},{end_30}"
 date_range_90 = f"{start_90},{end_90}"
+date_range = f"{date_range_30}|{date_range_90}"
 
+if _should_clear_report(st.session_state, region, selected_org_id, date_range):
+    for key in _REPORT_DATA_KEYS:
+        st.session_state.pop(key, None)
 
 # ── data fetching ─────────────────────────────────────────────────────────────
 
@@ -176,11 +268,11 @@ if pull:
     try:
         # Step 1 — DB queries (fast)
         with st.spinner("Querying database..."):
-            db_users = database.load_users_and_orgs(region)
-            org_user_counts = database.get_org_user_counts(region)
-            bundle_counts = database.get_bundle_counts_per_org(region)
-            star_ratings = database.get_star_ratings_by_org(region)
-            monthly_ratings = database.get_monthly_star_ratings(region)
+            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
+            org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
+            bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
+            star_ratings = database.get_star_ratings_by_org(region, org_id=selected_org_id)
+            monthly_ratings = database.get_monthly_star_ratings(region, org_id=selected_org_id)
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
@@ -190,13 +282,32 @@ if pull:
             sessions_90 = _cached_sessions_delivered(date_range_90)
             activity_completions = _cached_activity_completions(date_range_30)
             activity_catalogue = _cached_activity_catalogue()
-            activity_usage = _cached_activity_usage(date_range_30)
+            allowed_user_ids = (
+                frozenset(db_users["user_id"].astype(str))
+                if selected_org_id is not None
+                else None
+            )
+            activity_usage = _cached_activity_usage(
+                date_range_30, region, selected_org_id, allowed_user_ids
+            )
+            visit_durations = _cached_visit_durations(date_range_30)
+
+        if selected_org_id is not None:
+            org_user_ids = set(db_users["user_id"].astype(str))
+            logins_30 = _filter_to_org_users(logins_30, org_user_ids)
+            logins_90 = _filter_to_org_users(logins_90, org_user_ids)
+            sessions_30 = _filter_to_org_users(sessions_30, org_user_ids)
+            sessions_90 = _filter_to_org_users(sessions_90, org_user_ids)
+            activity_completions = _filter_to_org_users(
+                activity_completions, org_user_ids
+            )
+            visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
 
         # Step 3 — Last login per user (slowest — show progress)
-        all_user_ids = sorted(
-            set(db_users["user_id"])
-            | set(logins_30["user_id"])
-            | set(logins_90["user_id"])
+        all_user_ids = _last_login_user_ids(
+            db_users,
+            pd.concat([logins_30, logins_90], ignore_index=True),
+            selected_org_id,
         )
 
         with st.status("Fetching last login dates...", expanded=True) as status:
@@ -213,11 +324,7 @@ if pull:
                 expanded=False,
             )
 
-        # Step 4 — Visit durations
-        with st.spinner("Fetching session durations..."):
-            visit_durations = _cached_visit_durations(date_range_30)
-
-        # Step 5 — Build merged DataFrames
+        # Step 4 — Build merged DataFrames
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
                 db_users, logins_30, logins_90, last_login, visit_durations, activity_completions,
@@ -241,6 +348,10 @@ if pull:
             "region": region,
             "date_range_30": date_range_30,
             "date_range_90": date_range_90,
+            "fetched_region": region,
+            "fetched_org_id": selected_org_id,
+            "fetched_org_name": selected_org_name,
+            "fetched_date_range": date_range,
         })
 
         st.success("Data loaded successfully.")
@@ -265,7 +376,12 @@ else:
 
     # ── Tab 1: Global Overview ────────────────────────────────────────────────
     with tab1:
-        st.subheader("Global Overview")
+        fetched_org_name = st.session_state.get(
+            "fetched_org_name", "All organisations"
+        )
+        st.subheader(f"Global Overview — {fetched_org_name}")
+        if st.session_state.get("fetched_org_id") is not None:
+            st.info(f"Showing data for {fetched_org_name} only.")
 
         metric_labels = {
             "total_organisations":          "Organisations",
@@ -526,6 +642,11 @@ if "user_detail" in st.session_state:
         activity_usage_table=merger.build_activity_usage_table(
             _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
+        ),
+        org_filter_name=(
+            None
+            if st.session_state.get("fetched_org_id") is None
+            else st.session_state.get("fetched_org_name")
         ),
     )
     st.download_button(
