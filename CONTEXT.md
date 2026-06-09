@@ -26,6 +26,14 @@ _Avoid_: Edit mode
 A therapist running a live CST session with patients. Tracked in Matomo as `dimension10 == false`. All session-level metrics are scoped to deliver mode only.
 _Avoid_: Live mode
 
+**Active User**:
+A user with 2 or more Matomo visits in the selected reporting period. The threshold of 2 is fixed regardless of period length and serves as a minimum-engagement signal.
+_Avoid_: Engaged user, retained user
+
+**Reporting Period**:
+The user-selected date range (From / To) applied to all period-based metrics — logins, sessions delivered, visit durations, activity completions, and star ratings. Lifetime metrics (total registered users, total bundles created) are not period-scoped. Default is the previous 90 days.
+_Avoid_: Date range, 30-day window, 90-day window
+
 ### Analytics
 
 **Matomo Visit**:
