@@ -32,6 +32,74 @@ _REPORT_DATA_KEYS = (
     "fetched_date_range",
 )
 
+_OVERVIEW_METRICS = (
+    (
+        "total_organisations",
+        "Organisations",
+        "Current number of organisations represented in the report. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_users",
+        "Total Users",
+        "Current number of registered users represented in the report. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_groups_created",
+        "Groups Created",
+        "Current total number of groups stored for the selected organisation scope. "
+        "This is not limited by the selected date range.",
+    ),
+    (
+        "total_sessions_delivered",
+        "Sessions Delivered",
+        "Unique CST sessions delivered during the selected date range.",
+    ),
+    (
+        "overall_groups_avg_rating",
+        "Avg Group Rating",
+        "Response-weighted average of group ratings submitted during the selected date range.",
+    ),
+    (
+        "overall_therapists_avg_rating",
+        "Avg Therapist Rating",
+        "Response-weighted average of therapist ratings submitted during the selected date range.",
+    ),
+)
+
+_SECTION_HELP = {
+    "overview": (
+        "Summary for the selected organisation scope. Sessions and ratings use the "
+        "selected date range; organisations, users, and groups are current totals."
+    ),
+    "logins_by_organisation": (
+        "Number of Matomo visits, grouped by organisation, during the selected date "
+        "range. A visit is treated as a login/browser session."
+    ),
+    "monthly_average_star_ratings": (
+        "Response-weighted average group and therapist ratings submitted during the "
+        "selected date range, grouped by calendar month."
+    ),
+    "activity_usage": (
+        "Activity Complete events recorded during the selected date range and "
+        "organisation scope. Only activities completed in deliver mode are counted. "
+        "Activity names come from the current Squidex catalogue."
+    ),
+    "by_organisation": (
+        "Organisation-level details. Logins, active users, session-duration metrics, "
+        "sessions delivered, activity averages, and ratings use the selected date "
+        "range. Total users is the current registered-user count. Last login is the "
+        "most recent recorded visit found within the last 365 days."
+    ),
+    "by_user": (
+        "User-level details. Logins, session-duration metrics, and completed activities "
+        "use the selected date range. User, email, and organisation are current "
+        "database details. Last login is the most recent recorded visit found within "
+        "the last 365 days."
+    ),
+}
+
 
 def _column_config_for(dataframe, column_config):
     return {
@@ -39,6 +107,22 @@ def _column_config_for(dataframe, column_config):
         for column_name, config in column_config.items()
         if column_name in dataframe.columns
     }
+
+
+def _overview_metrics(fetched_org_id):
+    if fetched_org_id is None:
+        return _OVERVIEW_METRICS
+    return tuple(
+        metric for metric in _OVERVIEW_METRICS if metric[0] != "total_organisations"
+    )
+
+
+def _show_logins_by_organisation(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
+def _show_user_organisation_filter(fetched_org_id) -> bool:
+    return fetched_org_id is None
 
 
 # ── deploy-compatibility helpers ──────────────────────────────────────────────
@@ -258,7 +342,6 @@ with st.sidebar:
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Pulling last login data may take a few minutes")
-    st.caption(f"Deployment revision: {APP_REVISION}")
 
 if start_date > end_date:
     st.error("'From' date must be on or before 'To' date.")
@@ -390,32 +473,33 @@ else:
         fetched_org_name = st.session_state.get(
             "fetched_org_name", "All organisations"
         )
-        st.subheader(f"Overview — {fetched_org_name}")
+        st.subheader(f"Overview — {fetched_org_name}", help=_SECTION_HELP["overview"])
         if st.session_state.get("fetched_org_id") is not None:
             st.info(f"Showing data for {fetched_org_name} only.")
 
-        metric_labels = {
-            "total_organisations":          "Organisations",
-            "total_users":                  "Total Users",
-            "total_groups_created":         "Groups Created",
-            "total_sessions_delivered":     "Sessions Delivered",
-            "overall_groups_avg_rating":    "Avg Group Rating",
-            "overall_therapists_avg_rating": "Avg Therapist Rating",
-        }
-        cols = st.columns(len(metric_labels))
-        for col, (key, label) in zip(cols, metric_labels.items()):
-            col.metric(label, global_summary[key])
+        fetched_org_id = st.session_state.get("fetched_org_id")
+        overview_metrics = _overview_metrics(fetched_org_id)
+        cols = st.columns(len(overview_metrics))
+        for col, (key, label, help_text) in zip(cols, overview_metrics):
+            col.metric(label, global_summary[key], help=help_text)
 
         st.divider()
 
-        st.markdown("**Logins by Organisation**")
-        chart_data = (
-            org_summary.set_index("organisation_name")["logins"]
-            .sort_values(ascending=False)
-        )
-        st.bar_chart(chart_data)
+        if _show_logins_by_organisation(fetched_org_id):
+            st.markdown(
+                "**Logins by Organisation**",
+                help=_SECTION_HELP["logins_by_organisation"],
+            )
+            chart_data = (
+                org_summary.set_index("organisation_name")["logins"]
+                .sort_values(ascending=False)
+            )
+            st.bar_chart(chart_data)
 
-        st.markdown("**Monthly Average Star Ratings**")
+        st.markdown(
+            "**Monthly Average Star Ratings**",
+            help=_SECTION_HELP["monthly_average_star_ratings"],
+        )
         if not monthly_ratings.empty:
             monthly_pivot = (
                 _build_monthly_rating_summary(monthly_ratings)
@@ -431,7 +515,7 @@ else:
             st.info("No monthly rating data available.")
 
         st.divider()
-        st.subheader("Activity Usage")
+        st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
             _activity_catalogue = st.session_state.get("activity_catalogue", {})
@@ -494,7 +578,7 @@ else:
 
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
-        st.subheader("By Organisation")
+        st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
         st.dataframe(
             org_summary,
             column_config=_column_config_for(org_summary, {
@@ -567,8 +651,14 @@ else:
 
     # ── Tab 3: By User ────────────────────────────────────────────────────────
     with tab3:
-        st.subheader("By User")
-        org_filter = st.text_input("Filter by organisation name")
+        st.subheader("By User", help=_SECTION_HELP["by_user"])
+        org_filter = (
+            st.text_input("Filter by organisation name")
+            if _show_user_organisation_filter(
+                st.session_state.get("fetched_org_id")
+            )
+            else ""
+        )
         filtered = (
             user_detail
             if not org_filter

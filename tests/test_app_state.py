@@ -15,6 +15,7 @@ class _Context:
 
 def _import_app(monkeypatch):
     streamlit = ModuleType("streamlit")
+    streamlit._captions = []
     streamlit.secrets = {}
     streamlit.session_state = {}
     streamlit.sidebar = _Context()
@@ -26,7 +27,7 @@ def _import_app(monkeypatch):
     streamlit.markdown = lambda *args, **kwargs: None
     streamlit.date_input = lambda label, value, **kwargs: value
     streamlit.button = lambda *args, **kwargs: False
-    streamlit.caption = lambda *args, **kwargs: None
+    streamlit.caption = lambda text, **kwargs: streamlit._captions.append(text)
     streamlit.tabs = lambda names: [_Context() for _ in names]
     streamlit.info = lambda *args, **kwargs: None
 
@@ -76,3 +77,59 @@ def test_last_login_user_ids(monkeypatch) -> None:
 
     assert app._last_login_user_ids(db_users, logins, 196) == ["u1", "u2"]
     assert app._last_login_user_ids(db_users, logins, None) == ["u1", "u2", "u3"]
+
+
+def test_overview_metrics_depend_on_organisation_scope(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    all_org_metric_keys = [metric[0] for metric in app._overview_metrics(None)]
+    single_org_metric_keys = [metric[0] for metric in app._overview_metrics(196)]
+
+    assert "total_organisations" in all_org_metric_keys
+    assert "total_organisations" not in single_org_metric_keys
+    assert set(single_org_metric_keys) == set(all_org_metric_keys) - {
+        "total_organisations"
+    }
+
+
+def test_overview_metrics_all_have_help_text(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert all(help_text for _, _, help_text in app._overview_metrics(None))
+
+
+def test_all_report_sections_have_help_text(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert set(app._SECTION_HELP) == {
+        "overview",
+        "logins_by_organisation",
+        "monthly_average_star_ratings",
+        "activity_usage",
+        "by_organisation",
+        "by_user",
+    }
+    assert all(app._SECTION_HELP.values())
+    assert "selected date range" in app._SECTION_HELP["activity_usage"]
+
+
+def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_logins_by_organisation(None)
+    assert not app._show_logins_by_organisation(196)
+    assert not app._show_logins_by_organisation("unassigned")
+
+
+def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_user_organisation_filter(None)
+    assert not app._show_user_organisation_filter(196)
+    assert not app._show_user_organisation_filter("unassigned")
+
+
+def test_deployment_revision_is_not_shown_in_sidebar(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert not any("Deployment revision:" in caption for caption in app.st._captions)
