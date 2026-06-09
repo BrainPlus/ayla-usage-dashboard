@@ -75,9 +75,7 @@ date_range = f"{start_date},{end_date}"
 
 fetched_region = st.session_state.get("fetched_region")
 fetched_date_range = st.session_state.get("fetched_date_range")
-if (fetched_region is not None or fetched_date_range is not None) and (
-    fetched_region != region or fetched_date_range != date_range
-):
+if fetched_region != region or fetched_date_range != date_range:
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)
 
