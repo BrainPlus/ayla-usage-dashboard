@@ -4,7 +4,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 ---
 
-### build_excel_report(user_detail, org_summary, monthly_ratings, region, date_range_30, date_range_90)
+### build_excel_report(user_detail, org_summary, monthly_ratings, region, date_range_30, date_range_90, org_filter_name=None)
 
 **Purpose:** Assembles a four-sheet Excel workbook and returns it as bytes ready for download.
 
@@ -15,6 +15,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 - `region` *(str)* — `"uk"` or `"eu"`; recorded in the Methodology sheet
 - `date_range_30` *(str)* — `"YYYY-MM-DD,YYYY-MM-DD"`; recorded in the Methodology sheet
 - `date_range_90` *(str)* — `"YYYY-MM-DD,YYYY-MM-DD"`; recorded in the Methodology sheet
+- `org_filter_name` *(str or None, default None)* — when set, an "Organisation filter" row is inserted in the Methodology sheet showing the filtered organisation name
 
 **Returns:** `bytes` — the raw content of the `.xlsx` file.
 
@@ -22,7 +23,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 
 ---
 
-### build_methodology_df(region, date_range_30, date_range_90)
+### build_methodology_df(region, date_range_30, date_range_90, org_filter_name=None)
 
 **Purpose:** Builds a two-column DataFrame describing every metric in the report, used as the Methodology sheet.
 
@@ -30,6 +31,7 @@ Builds an in-memory `.xlsx` workbook from the final merged DataFrames and return
 - `region` *(str)* — inserted as the value for the "Region" row
 - `date_range_30` *(str)* — inserted as the value for the "30-day window" row
 - `date_range_90` *(str)* — inserted as the value for the "90-day window" row
+- `org_filter_name` *(str or None, default None)* — when set, an "Organisation filter" row is inserted after the "Region" row
 
 **Returns:** DataFrame with columns `Field` and `Description`, with one row per metric.
 
