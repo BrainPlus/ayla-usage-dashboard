@@ -96,6 +96,7 @@ def build_org_summary(
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
     visit_durations: pd.DataFrame | None = None,
+    delivery_funnel: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -109,6 +110,8 @@ def build_org_summary(
         org_user_counts:        organisation_name, user_count
         visit_durations:        user_id, visit_duration_seconds, has_deliver_action
                                 (raw visits — used for org-level min/max real session time)
+        delivery_funnel:        session instances with deliver_selected,
+                                active_delivery, and completed_session signals
 
     Returns:
         DataFrame with columns:
@@ -164,6 +167,27 @@ def build_org_summary(
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
 
+    # --- delivery funnel: unique (visit_id, bundle_id, session_id) per org ---
+    if delivery_funnel is not None and not delivery_funnel.empty:
+        funnel = delivery_funnel.drop_duplicates(
+            subset=["visit_id", "bundle_id", "session_id"]
+        ).merge(
+            user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+            on="user_id",
+            how="left",
+        )
+        funnel_counts = (
+            funnel.groupby("organisation_name", as_index=False)
+            .agg(
+                deliver_selected_sessions=("deliver_selected", "sum"),
+                active_delivery_sessions=("active_delivery", "sum"),
+            )
+        )
+        agg = agg.merge(funnel_counts, on="organisation_name", how="left")
+    else:
+        agg["deliver_selected_sessions"] = 0
+        agg["active_delivery_sessions"] = 0
+
     # --- avg activities per session ---
     activities_by_org = (
         user_detail.groupby("organisation_name")["activities_completed"]
@@ -205,8 +229,22 @@ def build_org_summary(
         "logins",
         "short_visit_count",
         "completed_sessions",
+        "deliver_selected_sessions",
+        "active_delivery_sessions",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
+    agg["deliver_to_active_dropoff"] = (
+        agg["deliver_selected_sessions"] - agg["active_delivery_sessions"]
+    )
+    agg["deliver_to_active_dropoff_pct"] = _dropoff_percentage(
+        agg["deliver_to_active_dropoff"], agg["deliver_selected_sessions"]
+    )
+    agg["active_to_completed_dropoff"] = (
+        agg["active_delivery_sessions"] - agg["completed_sessions"]
+    )
+    agg["active_to_completed_dropoff_pct"] = _dropoff_percentage(
+        agg["active_to_completed_dropoff"], agg["active_delivery_sessions"]
+    )
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
@@ -283,12 +321,27 @@ def build_org_summary(
         "min_real_session_minutes",
         "max_real_session_minutes",
         "short_visit_count",
+        "deliver_selected_sessions",
+        "active_delivery_sessions",
         "completed_sessions",
+        "deliver_to_active_dropoff",
+        "deliver_to_active_dropoff_pct",
+        "active_to_completed_dropoff",
+        "active_to_completed_dropoff_pct",
         "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",
     ]]
+
+
+def _dropoff_percentage(dropoff: pd.Series, previous_stage: pd.Series) -> pd.Series:
+    denominator = previous_stage.replace(0, pd.NA)
+    return (
+        pd.to_numeric(dropoff / denominator * 100, errors="coerce")
+        .fillna(0.0)
+        .round(1)
+    )
 
 
 def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
@@ -401,6 +454,12 @@ def build_global_summary(
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
         "total_completed_sessions": int(org_summary["completed_sessions"].sum()),
+        "total_deliver_selected_sessions": int(
+            org_summary["deliver_selected_sessions"].sum()
+        ) if "deliver_selected_sessions" in org_summary else 0,
+        "total_active_delivery_sessions": int(
+            org_summary["active_delivery_sessions"].sum()
+        ) if "active_delivery_sessions" in org_summary else 0,
         "overall_groups_avg_rating": groups_average,
         "overall_therapists_avg_rating": therapists_average,
     }

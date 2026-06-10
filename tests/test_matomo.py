@@ -11,11 +11,27 @@ sys.modules.setdefault("streamlit", streamlit_stub)
 import matomo
 
 
+def test_active_delivery_allowlist_matches_issue_28() -> None:
+    assert matomo._ACTIVE_DELIVERY_EVENTS == frozenset(
+        {
+            "Step Complete",
+            "Activity Complete",
+            "Reality Orientation Date Set",
+            "Reality Orientation Time Set",
+            "Reality Orientation Song Set",
+            "Reality Orientation Group Name Set",
+            "Reality Orientation YouTube Playlist Changed",
+            "Main Activity Card Start Click",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "function_name",
     [
         "get_visit_durations",
         "get_completed_sessions",
+        "get_delivery_funnel_instances",
         "get_activity_completions_per_user",
         "get_activity_usage_by_id",
         "get_step_completion_depth",
@@ -117,6 +133,110 @@ def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(
         columns=["visit_id", "bundle_id", "session_id", "user_id"],
     )
     pd.testing.assert_frame_equal(result, expected)
+
+
+def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_key(
+    monkeypatch,
+) -> None:
+    def event(action, bundle="b1", session="s1", mode="false"):
+        return {
+            "type": "event",
+            "eventAction": action,
+            "dimension10": mode,
+            "dimension14": bundle,
+            "dimension5": session,
+        }
+
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Talking Point Expand Click"),
+                event("Reality Orientation Date Set"),
+                event("Session Complete"),
+                event("Session Complete"),
+                event("Activity Complete", session="s2"),
+                event("Main Activity Card Start Click", session="s3", mode="true"),
+                event("Drawer Open", session="s4"),
+            ],
+        },
+        {
+            "idVisit": "v2",
+            "userId": "u1",
+            "actionDetails": [
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Step Complete"),
+            ],
+        },
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    result = matomo.get_delivery_funnel_instances("2026-01-01,2026-01-31")
+
+    assert result.to_dict("records") == [
+        {
+            "visit_id": "v1",
+            "bundle_id": "b1",
+            "session_id": "s1",
+            "user_id": "u1",
+            "deliver_selected": True,
+            "active_delivery": True,
+            "completed_session": True,
+        },
+        {
+            "visit_id": "v1",
+            "bundle_id": "b1",
+            "session_id": "s2",
+            "user_id": "u1",
+            "deliver_selected": False,
+            "active_delivery": False,
+            "completed_session": False,
+        },
+        {
+            "visit_id": "v2",
+            "bundle_id": "b1",
+            "session_id": "s1",
+            "user_id": "u1",
+            "deliver_selected": True,
+            "active_delivery": True,
+            "completed_session": False,
+        },
+    ]
+
+
+def test_delivery_funnel_completed_stage_matches_completed_sessions(monkeypatch) -> None:
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventAction": "Session Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                }
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    completed = matomo.get_completed_sessions("2026-01-01,2026-01-31")
+    funnel = matomo.get_delivery_funnel_instances("2026-01-01,2026-01-31")
+    funnel_completed = funnel.loc[
+        funnel["completed_session"],
+        ["visit_id", "bundle_id", "session_id", "user_id"],
+    ].reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(funnel_completed, completed)
 
 
 def test_get_login_form_outcomes_filters_only_successes_to_region_users(

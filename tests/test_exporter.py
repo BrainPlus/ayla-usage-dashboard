@@ -28,6 +28,19 @@ def test_methodology_describes_completed_session_definition() -> None:
     assert "prepare-mode events are excluded" in description
 
 
+def test_methodology_describes_delivery_funnel_and_dropoff() -> None:
+    methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
+
+    funnel = methodology[methodology["Field"] == "Delivery funnel"].iloc[0]["Description"]
+    dropoff = methodology[
+        methodology["Field"] == "Delivery funnel drop-off"
+    ].iloc[0]["Description"]
+
+    assert "Deliver Selected, Active Delivery, and Completed Session" in funnel
+    assert "visitId + bundleId + sessionId" in funnel
+    assert "previous stage as the denominator" in dropoff
+
+
 def test_methodology_includes_organisation_filter_when_selected() -> None:
     methodology = exporter.build_methodology_df(
         "eu",

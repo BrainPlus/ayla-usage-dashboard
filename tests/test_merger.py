@@ -524,6 +524,72 @@ def test_completed_sessions_are_consistent_across_user_org_and_global_summaries(
     assert global_summary["total_completed_sessions"] == 2
 
 
+def test_delivery_funnel_counts_and_dropoffs_are_aggregated_by_org() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org B"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+    ])
+    delivery_funnel = pd.DataFrame([
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": True, "completed_session": True,
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": False, "completed_session": False,
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": False, "completed_session": False,
+        },
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([
+            {"organisation_name": "Org A", "user_count": 1},
+            {"organisation_name": "Org B", "user_count": 1},
+        ]),
+        visit_durations=_visit_durations([]),
+        delivery_funnel=delivery_funnel,
+    )
+    global_summary = merger.build_global_summary(
+        org_summary,
+        _empty(["organisation_name", "total_groups"]),
+    )
+
+    org_a = org_summary.set_index("organisation_name").loc["Org A"]
+    assert org_a["deliver_selected_sessions"] == 2
+    assert org_a["active_delivery_sessions"] == 1
+    assert org_a["completed_sessions"] == 1
+    assert org_a["deliver_to_active_dropoff"] == 1
+    assert org_a["deliver_to_active_dropoff_pct"] == 50.0
+    assert org_a["active_to_completed_dropoff"] == 0
+    assert org_a["active_to_completed_dropoff_pct"] == 0.0
+
+    org_b = org_summary.set_index("organisation_name").loc["Org B"]
+    assert org_b["deliver_selected_sessions"] == 0
+    assert org_b["active_delivery_sessions"] == 0
+    assert org_b["completed_sessions"] == 0
+    assert org_b["deliver_to_active_dropoff_pct"] == 0.0
+    assert global_summary["total_deliver_selected_sessions"] == 2
+    assert global_summary["total_active_delivery_sessions"] == 1
+    assert global_summary["total_completed_sessions"] == 1
+
+
 def test_build_activity_usage_table_known_ids() -> None:
     """Known IDs get mapped to catalogue titles, sorted descending by completions."""
     usage = pd.DataFrame({"activity_id": ["abc", "def"], "completion_count": [5, 10]})

@@ -45,6 +45,18 @@ def build_methodology_df(
             "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
+            "Delivery funnel",
+            "Deliver Selected, Active Delivery, and Completed Session counts are each "
+            "deduplicated by (Matomo visitId + bundleId + sessionId). Active Delivery "
+            "requires a Deliver Selected event and at least one high-confidence "
+            "deliver-mode activity signal.",
+        ),
+        (
+            "Delivery funnel drop-off",
+            "Absolute difference and percentage decrease from each funnel stage to "
+            "the next. Percentage uses the previous stage as the denominator.",
+        ),
+        (
             "Avg activities per session",
             "Total Activity Complete events divided by completed sessions in the selected period. "
             "Note: fires on forward navigation — rapid click-through may inflate this count.",

@@ -13,6 +13,19 @@ import requests
 import streamlit as st
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+_DELIVER_SELECTED_EVENT = "Prepare/Deliver dialog - Deliver Click"
+_ACTIVE_DELIVERY_EVENTS = frozenset(
+    {
+        "Step Complete",
+        "Activity Complete",
+        "Reality Orientation Date Set",
+        "Reality Orientation Time Set",
+        "Reality Orientation Song Set",
+        "Reality Orientation Group Name Set",
+        "Reality Orientation YouTube Playlist Changed",
+        "Main Activity Card Start Click",
+    }
+)
 
 # Keep org_id on bulk-query signatures for caller/cache compatibility. Do not
 # send dimension13 as a source segment: production checks found 56-78% undercounting.
@@ -262,33 +275,40 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
     if not data:
         return pd.DataFrame(columns=columns)
 
-    records = []
-    for visit_index, visit in enumerate(data):
-        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
-        user_id = str(visit.get("userId", ""))
-        seen = set()
-        for action in visit.get("actionDetails", []):
-            if (
-                _extract_dimension(action, "10") != "false"
-                or action.get("type") != "event"
-                or action.get("eventAction") != "Session Complete"
-            ):
-                continue
-            b = _extract_dimension(action, "14")
-            s = _extract_dimension(action, "5")
-            key = (visit_id, b, s)
-            if b and s and key not in seen:
-                seen.add(key)
-                records.append(
-                    {
-                        "visit_id": visit_id,
-                        "bundle_id": b,
-                        "session_id": s,
-                        "user_id": user_id,
-                    }
-                )
+    instances = _delivery_session_instances_from_visits(data)
+    return instances.loc[
+        instances["completed_session"], columns
+    ].reset_index(drop=True)
 
-    return pd.DataFrame(records, columns=columns)
+
+def get_delivery_funnel_instances(date_range: str, org_id=None) -> pd.DataFrame:
+    """
+    Fetch delivery funnel signals deduplicated per CST session instance.
+
+    Active Delivery requires both a Deliver Selected event and at least one
+    high-confidence event from the #28 allowlist for the same
+    (visit_id, bundle_id, session_id). Completed Session uses the same
+    deliver-mode Session Complete definition as get_completed_sessions.
+    """
+    columns = [
+        "visit_id",
+        "bundle_id",
+        "session_id",
+        "user_id",
+        "deliver_selected",
+        "active_delivery",
+        "completed_session",
+    ]
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+    if not data:
+        return pd.DataFrame(columns=columns)
+    return _delivery_session_instances_from_visits(data)
 
 
 def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
@@ -824,6 +844,69 @@ def get_engagement_events(
 
 
 # --- helpers ---
+
+
+def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
+    columns = [
+        "visit_id",
+        "bundle_id",
+        "session_id",
+        "user_id",
+        "deliver_selected",
+        "active_delivery",
+        "completed_session",
+    ]
+    instances: dict[tuple[str, str, str], dict] = {}
+
+    for visit_index, visit in enumerate(visits):
+        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
+        user_id = str(visit.get("userId", ""))
+        for action in visit.get("actionDetails", []):
+            if (
+                action.get("type") != "event"
+                or _extract_dimension(action, "10") != "false"
+            ):
+                continue
+            bundle_id = _extract_dimension(action, "14")
+            session_id = _extract_dimension(action, "5")
+            if not bundle_id or not session_id:
+                continue
+
+            event_action = action.get("eventAction", "")
+            if (
+                event_action != _DELIVER_SELECTED_EVENT
+                and event_action not in _ACTIVE_DELIVERY_EVENTS
+                and event_action != "Session Complete"
+            ):
+                continue
+
+            key = (visit_id, bundle_id, session_id)
+            instance = instances.setdefault(
+                key,
+                {
+                    "visit_id": visit_id,
+                    "bundle_id": bundle_id,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "deliver_selected": False,
+                    "has_active_signal": False,
+                    "completed_session": False,
+                },
+            )
+            if event_action == _DELIVER_SELECTED_EVENT:
+                instance["deliver_selected"] = True
+            elif event_action in _ACTIVE_DELIVERY_EVENTS:
+                instance["has_active_signal"] = True
+            elif event_action == "Session Complete":
+                instance["completed_session"] = True
+
+    records = []
+    for instance in instances.values():
+        instance["active_delivery"] = (
+            instance["deliver_selected"] and instance.pop("has_active_signal")
+        )
+        records.append(instance)
+    return pd.DataFrame(records, columns=columns)
 
 
 def _extract_dimension(obj: dict, dim_number: str) -> str:

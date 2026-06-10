@@ -30,6 +30,7 @@ _REPORT_DATA_KEYS = (
     "org_summary",
     "global_summary",
     "login_form_outcomes",
+    "delivery_funnel",
     "monthly_ratings",
     "monthly_bundle_creations",
     "bundle_filter_breakdown",
@@ -99,6 +100,11 @@ _SECTION_HELP = {
         "Login form events during the selected date range. Successful submissions "
         "are restricted to identified users in the selected region. Attempts and "
         "failures happen before authentication and therefore cover all regions."
+    ),
+    "delivery_funnel": (
+        "Progression from selecting Deliver, through at least one high-confidence "
+        "deliver-mode activity signal, to a deliver-mode Session Complete event. "
+        "Each stage is deduplicated by Matomo visit + bundle + session ID."
     ),
     "monthly_average_star_ratings": (
         "Response-weighted average group and therapist ratings submitted during the "
@@ -231,6 +237,34 @@ def _bundle_filter_chart(
         .set_index("filter_value")[["bundle_count"]]
         .rename(columns={"bundle_count": "Bundles"})
     )
+
+
+def _delivery_funnel_summary(global_summary: dict) -> pd.DataFrame:
+    counts = [
+        int(global_summary.get("total_deliver_selected_sessions", 0)),
+        int(global_summary.get("total_active_delivery_sessions", 0)),
+        int(global_summary.get("total_completed_sessions", 0)),
+    ]
+    rows = []
+    for index, (stage, count) in enumerate(
+        zip(("Deliver Selected", "Active Delivery", "Completed Session"), counts)
+    ):
+        previous = counts[index - 1] if index > 0 else None
+        dropoff = previous - count if previous is not None else None
+        dropoff_pct = (
+            round(dropoff / previous * 100, 1)
+            if previous not in (None, 0)
+            else None
+        )
+        rows.append(
+            {
+                "Stage": stage,
+                "Sessions": count,
+                "Drop-off from previous": dropoff,
+                "Drop-off %": dropoff_pct,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _render_bundle_filter_breakdown(bundle_filter_breakdown: pd.DataFrame) -> None:
@@ -478,8 +512,8 @@ def _cached_login_form_outcomes(
 
 
 @st.cache_data(ttl=3600)
-def _cached_completed_sessions(date_range: str, region: str, org_id):
-    return matomo.get_completed_sessions(date_range, org_id=org_id)
+def _cached_delivery_funnel(date_range: str, region: str, org_id):
+    return matomo.get_delivery_funnel_instances(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -655,9 +689,13 @@ if pull:
                 if selected_org_id is None
                 else None
             )
-            completed_sessions = _cached_completed_sessions(
+            delivery_funnel = _cached_delivery_funnel(
                 date_range, region, selected_org_id
             )
+            completed_sessions = delivery_funnel.loc[
+                delivery_funnel["completed_session"],
+                ["visit_id", "bundle_id", "session_id", "user_id"],
+            ].reset_index(drop=True)
             activity_completions = _cached_activity_completions(
                 date_range, region, selected_org_id
             )
@@ -686,6 +724,9 @@ if pull:
         logins = _filter_to_database_users(logins, database_user_ids)
         completed_sessions = _filter_to_database_users(
             completed_sessions, database_user_ids
+        )
+        delivery_funnel = _filter_to_database_users(
+            delivery_funnel, database_user_ids
         )
         activity_completions = _filter_to_database_users(
             activity_completions, database_user_ids
@@ -728,6 +769,7 @@ if pull:
             org_summary = merger.build_org_summary(
                 user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
+                delivery_funnel=delivery_funnel,
             )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
@@ -741,6 +783,7 @@ if pull:
             "org_summary": org_summary,
             "global_summary": global_summary,
             "login_form_outcomes": login_form_outcomes,
+            "delivery_funnel": delivery_funnel,
             "monthly_ratings": monthly_ratings,
             "monthly_bundle_creations": monthly_bundle_creations,
             "bundle_filter_breakdown": bundle_filter_breakdown,
@@ -808,6 +851,20 @@ else:
             col.metric(label, global_summary[key], help=help_text)
 
         st.divider()
+        st.markdown(
+            "**Delivery Funnel**",
+            help=_SECTION_HELP["delivery_funnel"],
+        )
+        st.dataframe(
+            _delivery_funnel_summary(global_summary),
+            use_container_width=True,
+            column_config={
+                "Sessions": st.column_config.NumberColumn(format="%d"),
+                "Drop-off from previous": st.column_config.NumberColumn(format="%d"),
+                "Drop-off %": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+            hide_index=True,
+        )
 
         if _show_logins_by_organisation(fetched_org_id):
             st.markdown(
@@ -1178,12 +1235,38 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
+                "deliver_selected_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-mode Prepare/Deliver dialog - Deliver Click events, "
+                        "deduplicated by Matomo visit + bundle + session ID."
+                    ),
+                ),
+                "active_delivery_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-selected session instances with at least one "
+                        "high-confidence deliver-mode activity signal."
+                    ),
+                ),
                 "completed_sessions": st.column_config.NumberColumn(
                     help=(
                         "Deliver-mode Session Complete events in the selected period, "
                         "deduplicated by Matomo visit + bundle + session ID. Repeat "
                         "deliveries in separate visits are counted separately."
                     ),
+                ),
+                "deliver_to_active_dropoff": st.column_config.NumberColumn(
+                    help="Deliver Selected minus Active Delivery.",
+                ),
+                "deliver_to_active_dropoff_pct": st.column_config.NumberColumn(
+                    help="Drop-off from Deliver Selected to Active Delivery.",
+                    format="%.1f%%",
+                ),
+                "active_to_completed_dropoff": st.column_config.NumberColumn(
+                    help="Active Delivery minus Completed Sessions.",
+                ),
+                "active_to_completed_dropoff_pct": st.column_config.NumberColumn(
+                    help="Drop-off from Active Delivery to Completed Sessions.",
+                    format="%.1f%%",
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(

@@ -115,6 +115,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "overview",
         "logins_by_organisation",
         "login_form_outcomes",
+        "delivery_funnel",
         "monthly_bundle_creations",
         "bundle_filter_breakdown",
         "monthly_average_star_ratings",
@@ -132,6 +133,35 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert all(app._SECTION_HELP.values())
     assert "selected date range" in app._SECTION_HELP["activity_usage"]
     assert "signal to investigate" in app._SECTION_HELP["step_completion_depth"]
+
+
+def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    result = app._delivery_funnel_summary(
+        {
+            "total_deliver_selected_sessions": 10,
+            "total_active_delivery_sessions": 8,
+            "total_completed_sessions": 6,
+        }
+    )
+
+    assert pd.isna(result.iloc[0]["Drop-off from previous"])
+    assert pd.isna(result.iloc[0]["Drop-off %"])
+    assert result.iloc[1:].to_dict("records") == [
+        {
+            "Stage": "Active Delivery",
+            "Sessions": 8,
+            "Drop-off from previous": 2,
+            "Drop-off %": 20.0,
+        },
+        {
+            "Stage": "Completed Session",
+            "Sessions": 6,
+            "Drop-off from previous": 2,
+            "Drop-off %": 25.0,
+        },
+    ]
 
 
 def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:
