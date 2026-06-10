@@ -170,6 +170,62 @@ def get_monthly_bundle_creations(
         return pd.read_sql(sql, conn, params=params)
 
 
+def get_bundle_filter_breakdown(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts bundle filter preferences within the selected reporting period.
+
+    Returns columns: filter_type (str), filter_value (str), bundle_count (int)
+    Missing JSON values and empty strings are counted as "Not set".
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        WITH scoped_bundles AS (
+            SELECT b.bundle_filters
+            FROM bundles b
+            JOIN users u ON u.id = b.user_id
+            WHERE b.created_at >= :start AND b.created_at < :end_exclusive
+            {filter_sql}
+        ),
+        filter_values AS (
+            SELECT
+                'severity' AS filter_type,
+                COALESCE(NULLIF(BTRIM(bundle_filters->>'severity'), ''), 'Not set')
+                    AS filter_value
+            FROM scoped_bundles
+            UNION ALL
+            SELECT
+                'age' AS filter_type,
+                COALESCE(NULLIF(BTRIM(bundle_filters->>'age'), ''), 'Not set')
+                    AS filter_value
+            FROM scoped_bundles
+            UNION ALL
+            SELECT
+                'physical_requirement' AS filter_type,
+                COALESCE(
+                    NULLIF(BTRIM(bundle_filters->>'physical_requirement'), ''),
+                    'Not set'
+                ) AS filter_value
+            FROM scoped_bundles
+        )
+        SELECT filter_type, filter_value, COUNT(*) AS bundle_count
+        FROM filter_values
+        GROUP BY filter_type, filter_value
+        ORDER BY filter_type, bundle_count DESC, filter_value
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
 def get_star_ratings_by_org(
     region: str,
     start_date: date,

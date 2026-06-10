@@ -117,6 +117,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "overview",
         "logins_by_organisation",
         "monthly_bundle_creations",
+        "bundle_filter_breakdown",
         "monthly_average_star_ratings",
         "group_feedback_by_question",
         "therapist_feedback_by_question",
@@ -174,6 +175,24 @@ def test_monthly_bundle_creation_chart_uses_display_label_and_zero_fills(
     }
 
 
+def test_bundle_filter_chart_selects_category_and_orders_by_count(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    breakdown = pd.DataFrame(
+        [
+            {"filter_type": "severity", "filter_value": "mild", "bundle_count": 4},
+            {"filter_type": "age", "filter_value": "sixties", "bundle_count": 5},
+            {"filter_type": "severity", "filter_value": "Not set", "bundle_count": 2},
+        ]
+    )
+
+    chart = app._bundle_filter_chart(breakdown, "severity")
+
+    assert chart.to_dict("index") == {
+        "mild": {"Bundles": 4},
+        "Not set": {"Bundles": 2},
+    }
+
+
 def test_monthly_bundle_creation_summary_reloads_stale_merger_module(
     monkeypatch,
 ) -> None:
@@ -209,6 +228,28 @@ def test_monthly_bundle_creations_reloads_stale_database_module(monkeypatch) -> 
     monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_database)
 
     result = app._get_monthly_bundle_creations(
+        "eu", date(2026, 5, 1), date(2026, 5, 31), 196
+    )
+
+    assert result is expected
+    assert app.database is fresh_database
+
+
+def test_bundle_filter_breakdown_reloads_stale_database_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_database = ModuleType("database")
+    fresh_database = ModuleType("database")
+    expected = pd.DataFrame(
+        [{"filter_type": "age", "filter_value": "sixties", "bundle_count": 1}]
+    )
+    fresh_database.get_bundle_filter_breakdown = (
+        lambda region, start, end, org_id=None: expected
+    )
+
+    monkeypatch.setattr(app, "database", stale_database)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_database)
+
+    result = app._get_bundle_filter_breakdown(
         "eu", date(2026, 5, 1), date(2026, 5, 31), 196
     )
 

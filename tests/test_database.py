@@ -22,6 +22,7 @@ class _Engine:
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_monthly_bundle_creations",
+            "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -33,6 +34,7 @@ class _Engine:
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_monthly_bundle_creations",
+            "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -44,6 +46,7 @@ class _Engine:
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_monthly_bundle_creations",
+            "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -72,6 +75,7 @@ def test_database_queries_apply_organisation_filter(
 
     if function_name in (
         "get_monthly_bundle_creations",
+        "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
         "get_monthly_star_ratings",
     ):
@@ -83,6 +87,7 @@ def test_database_queries_apply_organisation_filter(
 
     if function_name in (
         "get_monthly_bundle_creations",
+        "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
         "get_monthly_star_ratings",
     ):
@@ -93,7 +98,10 @@ def test_database_queries_apply_organisation_filter(
         }
         timestamp_alias = (
             "b.created_at"
-            if function_name == "get_monthly_bundle_creations"
+            if function_name in (
+                "get_monthly_bundle_creations",
+                "get_bundle_filter_breakdown",
+            )
             else "fa.created_at"
         )
         assert f"{timestamp_alias} >= :start" in captured["sql"]
@@ -161,6 +169,31 @@ def test_monthly_bundle_creations_use_canonical_database_timestamp(monkeypatch) 
 
     assert "DATE_TRUNC('month', b.created_at)" in captured["sql"]
     assert "COUNT(b.id) AS bundles_created" in captured["sql"]
+    assert "SELECT * FROM bundles" not in captured["sql"]
+
+
+def test_bundle_filter_breakdown_counts_all_preferences_and_missing_values(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_bundle_filter_breakdown(
+        "eu", date(2026, 1, 1), date(2026, 6, 8)
+    )
+
+    assert "SELECT b.bundle_filters" in captured["sql"]
+    assert "bundle_filters->>'severity'" in captured["sql"]
+    assert "bundle_filters->>'age'" in captured["sql"]
+    assert "bundle_filters->>'physical_requirement'" in captured["sql"]
+    assert captured["sql"].count("'Not set'") == 3
+    assert "COUNT(*) AS bundle_count" in captured["sql"]
     assert "SELECT * FROM bundles" not in captured["sql"]
 
 

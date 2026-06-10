@@ -12,7 +12,7 @@ import matomo
 import merger
 import exporter
 
-APP_REVISION = "2026-06-10-bundle-creation-rate"
+APP_REVISION = "2026-06-10-bundle-filter-breakdown"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
@@ -31,6 +31,7 @@ _REPORT_DATA_KEYS = (
     "global_summary",
     "monthly_ratings",
     "monthly_bundle_creations",
+    "bundle_filter_breakdown",
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
@@ -95,6 +96,10 @@ _SECTION_HELP = {
     "monthly_bundle_creations": (
         "Bundles created during the selected reporting period, grouped by calendar "
         "month. Uses the database bundle creation timestamp."
+    ),
+    "bundle_filter_breakdown": (
+        "Severity, age, and physical requirement preferences selected for bundles "
+        "created during the reporting period. Missing preferences are shown as Not set."
     ),
     "group_feedback_by_question": (
         "Monthly response-weighted ratings for each question answered by groups. "
@@ -173,6 +178,44 @@ def _monthly_bundle_creation_chart(
     )
 
 
+def _bundle_filter_chart(
+    bundle_filter_breakdown: pd.DataFrame,
+    filter_type: str,
+) -> pd.DataFrame:
+    if bundle_filter_breakdown.empty:
+        return pd.DataFrame(columns=["Bundles"])
+    return (
+        bundle_filter_breakdown[
+            bundle_filter_breakdown["filter_type"] == filter_type
+        ]
+        .sort_values(["bundle_count", "filter_value"], ascending=[False, True])
+        .set_index("filter_value")[["bundle_count"]]
+        .rename(columns={"bundle_count": "Bundles"})
+    )
+
+
+def _render_bundle_filter_breakdown(bundle_filter_breakdown: pd.DataFrame) -> None:
+    st.markdown(
+        "**Bundle Filter Preferences**",
+        help=_SECTION_HELP["bundle_filter_breakdown"],
+    )
+    if bundle_filter_breakdown.empty:
+        st.info("No bundles were created in the selected reporting period.")
+        return
+
+    columns = st.columns(3)
+    for column, (filter_type, label) in zip(
+        columns,
+        (
+            ("severity", "Severity"),
+            ("age", "Age"),
+            ("physical_requirement", "Physical requirement"),
+        ),
+    ):
+        column.markdown(f"**{label}**")
+        column.bar_chart(_bundle_filter_chart(bundle_filter_breakdown, filter_type))
+
+
 def _monthly_question_chart(monthly_ratings: pd.DataFrame, target: str):
     summary = _build_monthly_question_rating_summary(monthly_ratings)
     target_ratings = summary[summary["target"] == target]
@@ -221,6 +264,15 @@ def _get_monthly_bundle_creations(region, start_date, end_date, org_id):
     if not hasattr(database, "get_monthly_bundle_creations"):
         database = importlib.reload(database)
     return database.get_monthly_bundle_creations(
+        region, start_date, end_date, org_id=org_id
+    )
+
+
+def _get_bundle_filter_breakdown(region, start_date, end_date, org_id):
+    global database
+    if not hasattr(database, "get_bundle_filter_breakdown"):
+        database = importlib.reload(database)
+    return database.get_bundle_filter_breakdown(
         region, start_date, end_date, org_id=org_id
     )
 
@@ -480,6 +532,9 @@ if pull:
             monthly_bundle_creations = _get_monthly_bundle_creations(
                 region, start_date, end_date, org_id=selected_org_id
             )
+            bundle_filter_breakdown = _get_bundle_filter_breakdown(
+                region, start_date, end_date, org_id=selected_org_id
+            )
             star_ratings = database.get_star_ratings_by_org(
                 region, start_date, end_date, org_id=selected_org_id
             )
@@ -560,6 +615,7 @@ if pull:
             "global_summary": global_summary,
             "monthly_ratings": monthly_ratings,
             "monthly_bundle_creations": monthly_bundle_creations,
+            "bundle_filter_breakdown": bundle_filter_breakdown,
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
@@ -594,6 +650,10 @@ else:
     monthly_bundle_creations = st.session_state.get(
         "monthly_bundle_creations",
         pd.DataFrame(columns=["month", "organisation_name", "bundles_created"]),
+    )
+    bundle_filter_breakdown = st.session_state.get(
+        "bundle_filter_breakdown",
+        pd.DataFrame(columns=["filter_type", "filter_value", "bundle_count"]),
     )
     fetched_start_date, fetched_end_date = (
         date.fromisoformat(value)
@@ -638,6 +698,7 @@ else:
                     monthly_bundle_creations, fetched_start_date, fetched_end_date
                 )
             )
+            _render_bundle_filter_breakdown(bundle_filter_breakdown)
 
         st.markdown(
             "**Daily Visit Activity**",
@@ -775,6 +836,7 @@ else:
                     monthly_bundle_creations, fetched_start_date, fetched_end_date
                 )
             )
+            _render_bundle_filter_breakdown(bundle_filter_breakdown)
         st.dataframe(
             org_summary,
             column_config=_column_config_for(org_summary, {
