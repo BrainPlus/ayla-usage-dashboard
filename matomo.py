@@ -511,6 +511,285 @@ def get_step_completion_depth(
     return pd.DataFrame(records, columns=columns)
 
 
+def get_talking_point_engagement(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts Talking Point Expand Click and Step Forward Click events per activity
+    in deliver-mode sessions only (dimension10 == false).
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false, enforced per action.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: activity_id (str), language (str),
+        expand_clicks (int), forward_clicks (int)
+    """
+    columns = ["activity_id", "language", "expand_clicks", "forward_clicks"]
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+        },
+        page_size=10000,
+    )
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    expand_counts: dict[tuple[str, str], int] = {}
+    forward_counts: dict[tuple[str, str], int] = {}
+
+    for visit in data:
+        if (
+            allowed_user_ids is not None
+            and str(visit.get("userId", "")) not in allowed_user_ids
+        ):
+            continue
+        for action in visit.get("actionDetails", []):
+            if (
+                _extract_dimension(action, "10") != "false"
+                or action.get("type") != "event"
+            ):
+                continue
+            event_action = action.get("eventAction", "")
+            if event_action not in ("Talking Point Expand Click", "Step Forward Click"):
+                continue
+            activity_id = _extract_dimension(action, "6")
+            if not activity_id:
+                continue
+            language = _extract_dimension(action, "2")
+            key = (activity_id, language)
+            if event_action == "Talking Point Expand Click":
+                expand_counts[key] = expand_counts.get(key, 0) + 1
+            else:
+                forward_counts[key] = forward_counts.get(key, 0) + 1
+
+    all_keys = set(expand_counts) | set(forward_counts)
+    if not all_keys:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(
+        [
+            {
+                "activity_id": k[0],
+                "language": k[1],
+                "expand_clicks": expand_counts.get(k, 0),
+                "forward_clicks": forward_counts.get(k, 0),
+            }
+            for k in all_keys
+        ]
+    )
+    df["activity_id"] = df["activity_id"].astype(str)
+    df["language"] = df["language"].astype(str)
+    df["expand_clicks"] = df["expand_clicks"].astype(int)
+    df["forward_clicks"] = df["forward_clicks"].astype(int)
+    return df
+
+
+def get_media_usage(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts audio and video interaction events per user and activity in
+    deliver-mode sessions only (dimension10 == false).
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false, enforced per action.
+    eventCategory: Activity
+
+    Audio events: Audio Button Click, Audio Play Click, Audio Pause Click
+    Video events: Video Button Click, Video Play Click, Video Pause Click
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: user_id (str), activity_id (str),
+        audio_clicks (int), video_clicks (int)
+    """
+    columns = ["user_id", "activity_id", "audio_clicks", "video_clicks"]
+    _AUDIO = frozenset(
+        {"Audio Button Click", "Audio Play Click", "Audio Pause Click"}
+    )
+    _VIDEO = frozenset(
+        {"Video Button Click", "Video Play Click", "Video Pause Click"}
+    )
+
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+        },
+        page_size=10000,
+    )
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    audio_counts: dict[tuple[str, str], int] = {}
+    video_counts: dict[tuple[str, str], int] = {}
+
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+        for action in visit.get("actionDetails", []):
+            if (
+                _extract_dimension(action, "10") != "false"
+                or action.get("type") != "event"
+                or action.get("eventCategory") != "Activity"
+            ):
+                continue
+            event_action = action.get("eventAction", "")
+            activity_id = _extract_dimension(action, "6")
+            key = (user_id, activity_id)
+            if event_action in _AUDIO:
+                audio_counts[key] = audio_counts.get(key, 0) + 1
+            elif event_action in _VIDEO:
+                video_counts[key] = video_counts.get(key, 0) + 1
+
+    all_keys = set(audio_counts) | set(video_counts)
+    if not all_keys:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(
+        [
+            {
+                "user_id": k[0],
+                "activity_id": k[1],
+                "audio_clicks": audio_counts.get(k, 0),
+                "video_clicks": video_counts.get(k, 0),
+            }
+            for k in all_keys
+        ]
+    )
+    df["user_id"] = df["user_id"].astype(str)
+    df["activity_id"] = df["activity_id"].astype(str)
+    df["audio_clicks"] = df["audio_clicks"].astype(int)
+    df["video_clicks"] = df["video_clicks"].astype(int)
+    return df
+
+
+def get_engagement_events(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts additional-activity acceptance and activity-replacement events per user
+    in deliver-mode sessions only (dimension10 == false).
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false, enforced per action.
+    eventCategory: Activity
+
+    Additional activity: Additional activity
+    Main replacement: Change Main Activity Click
+    Warmup replacement: Change Warmup Activity Click
+    Reality orientation replacement: Change Reality Orientation Activity Click
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: user_id (str), additional_activity_count (int),
+        main_replacements (int), warmup_replacements (int), ro_replacements (int)
+    """
+    columns = [
+        "user_id",
+        "additional_activity_count",
+        "main_replacements",
+        "warmup_replacements",
+        "ro_replacements",
+    ]
+    _ADDITIONAL = "Additional activity"
+    _REPLACE_MAIN = "Change Main Activity Click"
+    _REPLACE_WARMUP = "Change Warmup Activity Click"
+    _REPLACE_RO = "Change Reality Orientation Activity Click"
+
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+        },
+        page_size=10000,
+    )
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    additional: dict[str, int] = {}
+    replace_main: dict[str, int] = {}
+    replace_warmup: dict[str, int] = {}
+    replace_ro: dict[str, int] = {}
+
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+        for action in visit.get("actionDetails", []):
+            if (
+                _extract_dimension(action, "10") != "false"
+                or action.get("type") != "event"
+                or action.get("eventCategory") != "Activity"
+            ):
+                continue
+            event_action = action.get("eventAction", "")
+            if event_action == _ADDITIONAL:
+                additional[user_id] = additional.get(user_id, 0) + 1
+            elif event_action == _REPLACE_MAIN:
+                replace_main[user_id] = replace_main.get(user_id, 0) + 1
+            elif event_action == _REPLACE_WARMUP:
+                replace_warmup[user_id] = replace_warmup.get(user_id, 0) + 1
+            elif event_action == _REPLACE_RO:
+                replace_ro[user_id] = replace_ro.get(user_id, 0) + 1
+
+    all_users = (
+        set(additional) | set(replace_main) | set(replace_warmup) | set(replace_ro)
+    )
+    if not all_users:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(
+        [
+            {
+                "user_id": uid,
+                "additional_activity_count": additional.get(uid, 0),
+                "main_replacements": replace_main.get(uid, 0),
+                "warmup_replacements": replace_warmup.get(uid, 0),
+                "ro_replacements": replace_ro.get(uid, 0),
+            }
+            for uid in all_users
+        ]
+    )
+    df["user_id"] = df["user_id"].astype(str)
+    for col in (
+        "additional_activity_count",
+        "main_replacements",
+        "warmup_replacements",
+        "ro_replacements",
+    ):
+        df[col] = df[col].astype(int)
+    return df
+
+
 # --- helpers ---
 
 

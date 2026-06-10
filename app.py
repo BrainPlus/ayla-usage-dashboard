@@ -36,6 +36,9 @@ _REPORT_DATA_KEYS = (
     "activity_catalogue",
     "activity_usage",
     "step_completion_depth",
+    "talking_point_engagement",
+    "media_usage",
+    "engagement_events",
     "daily_visit_activity",
     "region",
     "date_range",
@@ -126,6 +129,25 @@ _SECTION_HELP = {
         "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
         "most recent recorded visit found within the last 365 days."
+    ),
+    "talking_point_engagement": (
+        "Approximate ratio of Talking Point Expand Clicks to Step Forward Clicks "
+        "per activity, in deliver mode. Step Forward Click is used as a denominator "
+        "proxy because Matomo does not record every talking-point shown. Activities "
+        "with fewer than 10 forward-clicks in the period are excluded."
+    ),
+    "media_usage_by_org": (
+        "Audio and video interaction events per completed session for each "
+        "organisation, in deliver mode. Organisations with zero media interactions "
+        "in the period are shown explicitly. Low usage may reflect connectivity, "
+        "device setup, or content preferences — not necessarily a problem."
+    ),
+    "engagement_events_by_org": (
+        "Additional-activity acceptance and activity-replacement rates per "
+        "completed session for each organisation, in deliver mode. "
+        "'Additional activity' fires when a facilitator accepts the prompt to run "
+        "another main activity. Replacement rates track how often the default "
+        "activity was swapped for an alternative. The two metrics are separate."
     ),
     "by_user": (
         "User-level details. Logins, session-duration metrics, completed sessions, "
@@ -481,6 +503,36 @@ def _cached_visit_dates(date_range: str, region: str, org_id):
 
 
 @st.cache_data(ttl=3600)
+def _cached_talking_point_engagement(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_talking_point_engagement(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_media_usage(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_media_usage(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_engagement_events(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
 def _cached_organisations(region: str) -> pd.DataFrame:
     return database.get_organisations(region)
 
@@ -586,6 +638,15 @@ if pull:
                 date_range, region, selected_org_id
             )
             visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
+            talking_point_engagement = _cached_talking_point_engagement(
+                date_range, region, selected_org_id, database_user_ids
+            )
+            media_usage = _cached_media_usage(
+                date_range, region, selected_org_id, database_user_ids
+            )
+            engagement_events = _cached_engagement_events(
+                date_range, region, selected_org_id, database_user_ids
+            )
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
         logins = _filter_to_database_users(logins, database_user_ids)
@@ -602,6 +663,10 @@ if pull:
             visit_durations, database_user_ids
         )
         visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
+        media_usage = _filter_to_database_users(media_usage, database_user_ids)
+        engagement_events = _filter_to_database_users(
+            engagement_events, database_user_ids
+        )
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(db_users)
@@ -648,6 +713,9 @@ if pull:
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
             "step_completion_depth": step_completion_depth,
+            "talking_point_engagement": talking_point_engagement,
+            "media_usage": media_usage,
+            "engagement_events": engagement_events,
             "daily_visit_activity": daily_visit_activity,
             "region": region,
             "date_range": date_range,
@@ -906,6 +974,61 @@ else:
                 hide_index=True,
             )
 
+        st.markdown(
+            "**Talking-Point Engagement (Approximate)**",
+            help=_SECTION_HELP["talking_point_engagement"],
+        )
+        _tp_engagement = st.session_state.get(
+            "talking_point_engagement", pd.DataFrame()
+        )
+        if _tp_engagement.empty:
+            st.info(
+                "No Talking Point Expand Click or Step Forward Click events "
+                "recorded in the selected scope."
+            )
+        else:
+            _tp_table = merger.build_talking_point_engagement_table(
+                _tp_engagement, _activity_catalogue
+            )
+            if _tp_table.empty:
+                st.info(
+                    "No activities had 10 or more Step Forward Clicks in the "
+                    "selected scope. Increase the date range to see results."
+                )
+            else:
+                st.caption(
+                    "Ratio of Talking Point Expand Clicks to Step Forward Clicks "
+                    "— approximate because Step Forward Click is used as a proxy "
+                    "denominator, not the exact number of talking points shown."
+                )
+                st.dataframe(
+                    _tp_table,
+                    use_container_width=True,
+                    column_config=_column_config_for(
+                        _tp_table,
+                        {
+                            "Activity Name": st.column_config.TextColumn("Activity Name"),
+                            "Language": st.column_config.TextColumn("Language"),
+                            "Expand Clicks": st.column_config.NumberColumn(
+                                "Expand Clicks", format="%d"
+                            ),
+                            "Step Forward Clicks": st.column_config.NumberColumn(
+                                "Step Forward Clicks", format="%d"
+                            ),
+                            "Approx. Engagement Ratio": st.column_config.NumberColumn(
+                                "Approx. Engagement Ratio",
+                                format="%.2f",
+                                help=(
+                                    "Talking Point Expand Clicks ÷ Step Forward Clicks. "
+                                    "Approximate: Step Forward Click is a proxy denominator "
+                                    "because Matomo does not record every talking point shown."
+                                ),
+                            ),
+                        },
+                    ),
+                    hide_index=True,
+                )
+
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
@@ -990,6 +1113,103 @@ else:
                 ),
             }),
             use_container_width=True,
+        )
+
+        st.divider()
+        st.markdown(
+            "**Media Usage by Organisation**",
+            help=_SECTION_HELP["media_usage_by_org"],
+        )
+        _media_usage_raw = st.session_state.get("media_usage", pd.DataFrame())
+        _org_session_counts = org_summary[["organisation_name", "completed_sessions"]]
+        _media_table = merger.build_media_usage_by_org(
+            _media_usage_raw,
+            user_detail,
+            _org_session_counts,
+        )
+        st.dataframe(
+            _media_table,
+            use_container_width=True,
+            column_config=_column_config_for(
+                _media_table,
+                {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "completed_sessions": st.column_config.NumberColumn(
+                        "Completed Sessions", format="%d"
+                    ),
+                    "audio_clicks": st.column_config.NumberColumn(
+                        "Audio Interactions", format="%d",
+                        help="Total Audio Button/Play/Pause clicks in deliver mode"
+                    ),
+                    "video_clicks": st.column_config.NumberColumn(
+                        "Video Interactions", format="%d",
+                        help="Total Video Button/Play/Pause clicks in deliver mode"
+                    ),
+                    "audio_rate": st.column_config.NumberColumn(
+                        "Audio / Session",
+                        format="%.2f",
+                        help="Audio interactions per completed session",
+                    ),
+                    "video_rate": st.column_config.NumberColumn(
+                        "Video / Session",
+                        format="%.2f",
+                        help="Video interactions per completed session",
+                    ),
+                },
+            ),
+            hide_index=True,
+        )
+
+        st.divider()
+        st.markdown(
+            "**Activity Engagement by Organisation**",
+            help=_SECTION_HELP["engagement_events_by_org"],
+        )
+        _engagement_events_raw = st.session_state.get("engagement_events", pd.DataFrame())
+        _engagement_table = merger.build_engagement_events_by_org(
+            _engagement_events_raw,
+            user_detail,
+            _org_session_counts,
+        )
+        st.dataframe(
+            _engagement_table,
+            use_container_width=True,
+            column_config=_column_config_for(
+                _engagement_table,
+                {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "completed_sessions": st.column_config.NumberColumn(
+                        "Completed Sessions", format="%d"
+                    ),
+                    "additional_activity_rate": st.column_config.NumberColumn(
+                        "Additional Activity / Session",
+                        format="%.2f",
+                        help=(
+                            "How often facilitators accepted the prompt to run an "
+                            "additional main activity, per completed session."
+                        ),
+                    ),
+                    "main_replacement_rate": st.column_config.NumberColumn(
+                        "Main Activity Replacements / Session",
+                        format="%.2f",
+                        help="Change Main Activity Click events per completed session",
+                    ),
+                    "warmup_replacement_rate": st.column_config.NumberColumn(
+                        "Warmup Replacements / Session",
+                        format="%.2f",
+                        help="Change Warmup Activity Click events per completed session",
+                    ),
+                    "ro_replacement_rate": st.column_config.NumberColumn(
+                        "RO Replacements / Session",
+                        format="%.2f",
+                        help=(
+                            "Change Reality Orientation Activity Click events "
+                            "per completed session"
+                        ),
+                    ),
+                },
+            ),
+            hide_index=True,
         )
 
     # ── Tab 3: By User ────────────────────────────────────────────────────────
