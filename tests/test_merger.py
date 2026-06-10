@@ -577,6 +577,57 @@ def test_build_activity_usage_table_includes_normalised_language() -> None:
     ]
 
 
+def test_build_step_completion_depth_table_summarises_depth_and_reach() -> None:
+    completions = pd.DataFrame(
+        [
+            {"activity_instance_id": "i1", "activity_id": "a1", "language": "en-GB", "step_number": 1},
+            {"activity_instance_id": "i1", "activity_id": "a1", "language": "en-GB", "step_number": 2},
+            {"activity_instance_id": "i1", "activity_id": "a1", "language": "en-GB", "step_number": 2},
+            {"activity_instance_id": "i2", "activity_id": "a1", "language": "en", "step_number": 1},
+            {"activity_instance_id": "i2", "activity_id": "a1", "language": "en", "step_number": 2},
+            {"activity_instance_id": "i2", "activity_id": "a1", "language": "en", "step_number": 3},
+            {"activity_instance_id": "i3", "activity_id": "a1", "language": "en", "step_number": 1},
+        ]
+    )
+
+    result = merger.build_step_completion_depth_table(completions, {"a1": "Warm Up"})
+
+    assert result.to_dict("records") == [
+        {
+            "Activity Name": "Warm Up",
+            "Language": "UK",
+            "Activity Occurrences": 3,
+            "Avg Last Step Reached": 2.0,
+            "Completion Depth Distribution": "Step 1: 1 (33%); Step 2: 1 (33%); Step 3: 1 (33%)",
+            "Least Reached Step(s)": "Step 3 (1/3, 33%)",
+        }
+    ]
+
+
+def test_build_step_completion_depth_table_excludes_activities_without_events() -> None:
+    result = merger.build_step_completion_depth_table(
+        pd.DataFrame(
+            columns=[
+                "activity_instance_id",
+                "activity_id",
+                "language",
+                "step_number",
+            ]
+        ),
+        {"a1": "Warm Up"},
+    )
+
+    assert result.empty
+    assert list(result.columns) == [
+        "Activity Name",
+        "Language",
+        "Activity Occurrences",
+        "Avg Last Step Reached",
+        "Completion Depth Distribution",
+        "Least Reached Step(s)",
+    ]
+
+
 def test_activity_language_filter_options_normalise_common_locales() -> None:
     usage = pd.DataFrame(
         {

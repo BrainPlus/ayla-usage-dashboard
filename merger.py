@@ -562,6 +562,83 @@ def build_activity_usage_table(
     )
 
 
+def build_step_completion_depth_table(
+    step_completions: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Summarise completion depth for activities with recorded Step Complete events.
+
+    Completion depth is the highest completed step number in each activity
+    occurrence. Least-reached steps are calculated from unique observed step
+    completions per occurrence.
+    """
+    columns = [
+        "Activity Name",
+        "Language",
+        "Activity Occurrences",
+        "Avg Last Step Reached",
+        "Completion Depth Distribution",
+        "Least Reached Step(s)",
+    ]
+    if step_completions.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = step_completions.copy()
+    df["step_number"] = pd.to_numeric(df["step_number"], errors="coerce")
+    df = df.dropna(subset=["activity_instance_id", "activity_id", "step_number"])
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df["step_number"] = df["step_number"].astype(int)
+    df["Language"] = df["language"].map(_normalise_activity_language)
+    df = df.drop_duplicates(
+        ["activity_instance_id", "activity_id", "Language", "step_number"]
+    )
+
+    rows = []
+    for (activity_id, language), activity_rows in df.groupby(
+        ["activity_id", "Language"], dropna=False
+    ):
+        last_steps = activity_rows.groupby("activity_instance_id")["step_number"].max()
+        occurrence_count = int(last_steps.size)
+        depth_counts = last_steps.value_counts().sort_index()
+        reach_counts = (
+            activity_rows.groupby("step_number")["activity_instance_id"]
+            .nunique()
+            .sort_index()
+        )
+        least_reached_count = int(reach_counts.min())
+        least_reached_steps = reach_counts[reach_counts == least_reached_count].index
+
+        rows.append(
+            {
+                "Activity Name": activity_catalogue.get(str(activity_id), str(activity_id)),
+                "Language": format_activity_language_filter(language),
+                "Activity Occurrences": occurrence_count,
+                "Avg Last Step Reached": round(float(last_steps.mean()), 1),
+                "Completion Depth Distribution": "; ".join(
+                    f"Step {step}: {count} ({count / occurrence_count:.0%})"
+                    for step, count in depth_counts.items()
+                ),
+                "Least Reached Step(s)": ", ".join(
+                    f"Step {step} ({least_reached_count}/{occurrence_count}, "
+                    f"{least_reached_count / occurrence_count:.0%})"
+                    for step in least_reached_steps
+                ),
+            }
+        )
+
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(
+            ["Activity Occurrences", "Activity Name", "Language"],
+            ascending=[False, True, True],
+        )
+        .reset_index(drop=True)
+    )
+
+
 def activity_language_filter_options(activity_usage: pd.DataFrame) -> list[str]:
     """Return available activity language filter values, with all languages first."""
     if activity_usage.empty or "language" not in activity_usage.columns:

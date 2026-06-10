@@ -35,6 +35,7 @@ _REPORT_DATA_KEYS = (
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
+    "step_completion_depth",
     "daily_visit_activity",
     "region",
     "date_range",
@@ -114,6 +115,11 @@ _SECTION_HELP = {
         "Activity Complete events recorded during the selected date range and "
         "organisation scope. Only activities completed in deliver mode are counted. "
         "Activity names come from the current Squidex catalogue."
+    ),
+    "step_completion_depth": (
+        "How far facilitators progressed through each activity during the selected "
+        "reporting period and organisation scope, based on deliver-mode Step Complete "
+        "events. Low reach is a signal to investigate, not proof of a content problem."
     ),
     "by_organisation": (
         "Organisation-level details. Logins, active users, session-duration metrics, "
@@ -455,6 +461,16 @@ def _cached_activity_usage(
 
 
 @st.cache_data(ttl=3600)
+def _cached_step_completion_depth(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_step_completion_depth(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
 def _cached_visit_durations(date_range: str, region: str, org_id):
     return matomo.get_visit_durations(date_range, org_id=org_id)
 
@@ -563,6 +579,9 @@ if pull:
             activity_usage = _cached_activity_usage(
                 date_range, region, selected_org_id, database_user_ids
             )
+            step_completion_depth = _cached_step_completion_depth(
+                date_range, region, selected_org_id, database_user_ids
+            )
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
@@ -575,6 +594,9 @@ if pull:
         )
         activity_completions = _filter_to_database_users(
             activity_completions, database_user_ids
+        )
+        step_completion_depth = _filter_to_database_users(
+            step_completion_depth, database_user_ids
         )
         visit_durations = _filter_to_database_users(
             visit_durations, database_user_ids
@@ -625,6 +647,7 @@ if pull:
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
+            "step_completion_depth": step_completion_depth,
             "daily_visit_activity": daily_visit_activity,
             "region": region,
             "date_range": date_range,
@@ -767,9 +790,9 @@ else:
 
         st.divider()
         st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])
+        _activity_catalogue = st.session_state.get("activity_catalogue", {})
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
-            _activity_catalogue = st.session_state.get("activity_catalogue", {})
             _activity_language_options = merger.activity_language_filter_options(_activity_usage)
             _activity_language_filter = (
                 st.selectbox(
@@ -826,6 +849,62 @@ else:
                         f"{_activity_catalogue_stats['usage_ids']} Matomo activity IDs "
                         "could not be resolved to Squidex activity titles."
                     )
+
+        st.markdown(
+            "**Step Completion Depth**",
+            help=_SECTION_HELP["step_completion_depth"],
+        )
+        _step_completion_depth = st.session_state.get(
+            "step_completion_depth", pd.DataFrame()
+        )
+        if _step_completion_depth.empty:
+            st.info("No Step Complete events recorded in the selected scope.")
+        else:
+            _step_language_options = merger.activity_language_filter_options(
+                _step_completion_depth
+            )
+            _step_language_filter = (
+                st.selectbox(
+                    "Step completion language",
+                    _step_language_options,
+                    format_func=merger.format_activity_language_filter,
+                    key="step_completion_language_filter",
+                )
+                if len(_step_language_options) > 1
+                else "all"
+            )
+            _filtered_step_completion_depth = merger.filter_activity_usage_by_language(
+                _step_completion_depth,
+                _step_language_filter,
+            )
+            _step_completion_depth_table = merger.build_step_completion_depth_table(
+                _filtered_step_completion_depth,
+                _activity_catalogue,
+            )
+            st.dataframe(
+                _step_completion_depth_table,
+                use_container_width=True,
+                column_config=_column_config_for(
+                    _step_completion_depth_table,
+                    {
+                        "Activity Name": st.column_config.TextColumn("Activity Name"),
+                        "Language": st.column_config.TextColumn("Language"),
+                        "Activity Occurrences": st.column_config.NumberColumn(
+                            "Activity Occurrences", format="%d"
+                        ),
+                        "Avg Last Step Reached": st.column_config.NumberColumn(
+                            "Avg Last Step Reached", format="%.1f"
+                        ),
+                        "Completion Depth Distribution": st.column_config.TextColumn(
+                            "Completion Depth Distribution"
+                        ),
+                        "Least Reached Step(s)": st.column_config.TextColumn(
+                            "Least Reached Step(s)"
+                        ),
+                    },
+                ),
+                hide_index=True,
+            )
 
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:

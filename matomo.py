@@ -1,6 +1,7 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
 # Deliver-mode filtering checks dimension10 on fetched actions in Python.
-# Completed-session events also use the required customDimension10 source segment.
+# Completed-session and step-depth events also use the required customDimension10
+# source segment.
 # Do not apply dimension13 as a source-side Matomo segment.
 
 import io
@@ -405,6 +406,109 @@ def get_activity_usage_by_id(
     df["language"] = df["language"].astype(str)
     df["completion_count"] = df["completion_count"].astype(int)
     return df
+
+
+def get_step_completion_depth(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Fetches unique completed steps for delivered activity occurrences.
+
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false, with the same filter enforced per action.
+    Counts Step Complete events where dimension10 == "false". Repeated events for
+    the same step within one activity occurrence are deduplicated.
+
+    An activity occurrence is identified by visit, bundle, session, and activity.
+    dimension7 contains UUID step IDs. Step numbers are derived from the
+    chronological order in which unique steps are completed within each activity
+    occurrence, so repeated completions after backtracking do not inflate depth.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: activity_instance_id, user_id, activity_id,
+        language, step_number
+    """
+    columns = [
+        "activity_instance_id",
+        "user_id",
+        "activity_id",
+        "language",
+        "step_number",
+    ]
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+            "segment": "customDimension10==false",
+        },
+        page_size=10000,
+    )
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    records = []
+    for visit_index, visit in enumerate(data):
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+
+        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
+        activity_events: dict[str, list[tuple[float, int, str, str, str]]] = {}
+        for action_index, action in enumerate(visit.get("actionDetails", [])):
+            if (
+                _extract_dimension(action, "10") != "false"
+                or action.get("type") != "event"
+                or action.get("eventCategory") != "Step"
+                or action.get("eventAction") != "Step Complete"
+            ):
+                continue
+
+            activity_id = _extract_dimension(action, "6")
+            step_id = _extract_dimension(action, "7")
+            if not activity_id or not step_id:
+                continue
+
+            language = _extract_dimension(action, "2")
+            bundle_id = _extract_dimension(action, "14")
+            session_id = _extract_dimension(action, "5")
+            activity_instance_id = "|".join(
+                [visit_id, bundle_id, session_id, activity_id]
+            )
+            try:
+                timestamp = float(action.get("timestamp"))
+            except (TypeError, ValueError):
+                timestamp = float(action_index)
+            activity_events.setdefault(activity_instance_id, []).append(
+                (timestamp, action_index, step_id, activity_id, language)
+            )
+
+        for activity_instance_id, events in activity_events.items():
+            seen_step_ids = set()
+            step_number = 0
+            for _, _, step_id, activity_id, language in sorted(events):
+                if step_id in seen_step_ids:
+                    continue
+                seen_step_ids.add(step_id)
+                step_number += 1
+                records.append(
+                    {
+                        "activity_instance_id": activity_instance_id,
+                        "user_id": user_id,
+                        "activity_id": activity_id,
+                        "language": language,
+                        "step_number": step_number,
+                    }
+                )
+
+    return pd.DataFrame(records, columns=columns)
 
 
 # --- helpers ---
