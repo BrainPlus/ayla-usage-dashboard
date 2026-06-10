@@ -94,6 +94,46 @@ def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     return df[["user_id", "visits"]].reset_index(drop=True)
 
 
+def get_login_form_outcomes(
+    date_range: str,
+    allowed_user_ids: frozenset[str],
+) -> dict[str, int]:
+    """
+    Count login form attempts, successes, and failures in a date range.
+
+    Attempts and failures happen before authentication, so they cannot be
+    reliably filtered by region. Successes are restricted to identified users
+    in the selected region.
+    """
+    outcomes = {"attempts": 0, "successes": 0, "failures": 0}
+    event_keys = {
+        "Submit Login Form": "attempts",
+        "Submit Login Form Success": "successes",
+        "Submit Login Form Failure": "failures",
+    }
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        for action in visit.get("actionDetails", []):
+            if action.get("type") != "event":
+                continue
+            outcome = event_keys.get(action.get("eventAction"))
+            if outcome is None:
+                continue
+            if outcome == "successes" and user_id not in allowed_user_ids:
+                continue
+            outcomes[outcome] += 1
+
+    return outcomes
+
+
 def get_last_login_per_user(
     user_ids: list[str], progress_callback=None
 ) -> pd.DataFrame:

@@ -119,6 +119,57 @@ def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(
     pd.testing.assert_frame_equal(result, expected)
 
 
+def test_get_login_form_outcomes_filters_only_successes_to_region_users(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "userId": "eu-user",
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Success"},
+            ],
+        },
+        {
+            "userId": "uk-user",
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Success"},
+            ],
+        },
+        {
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Failure"},
+                {"type": "event", "eventAction": "Unrelated Event"},
+            ],
+        },
+    ]
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
+
+    result = matomo.get_login_form_outcomes(
+        "2026-01-01,2026-01-31", frozenset({"eu-user"})
+    )
+
+    assert result == {"attempts": 3, "successes": 1, "failures": 1}
+
+
+def test_get_login_form_outcomes_does_not_apply_deliver_mode_segment(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_fetch(params, page_size=5000):
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
+
+    matomo.get_login_form_outcomes("2026-01-01,2026-01-31", frozenset())
+
+    assert "segment" not in captured["params"]
+
+
 def test_get_completed_sessions_raises_for_non_list_response(monkeypatch) -> None:
     import pytest
     monkeypatch.setattr(matomo, "matomo_get", lambda params: {"error": "bad response"})

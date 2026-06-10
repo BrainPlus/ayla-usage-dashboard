@@ -114,6 +114,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert set(app._SECTION_HELP) == {
         "overview",
         "logins_by_organisation",
+        "login_form_outcomes",
         "monthly_bundle_creations",
         "bundle_filter_breakdown",
         "monthly_average_star_ratings",
@@ -139,6 +140,14 @@ def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) ->
     assert app._show_logins_by_organisation(None)
     assert not app._show_logins_by_organisation(196)
     assert not app._show_logins_by_organisation("unassigned")
+
+
+def test_login_form_outcomes_only_show_for_all_organisations(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_login_form_outcomes(None)
+    assert not app._show_login_form_outcomes(196)
+    assert not app._show_login_form_outcomes("unassigned")
 
 
 def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) -> None:

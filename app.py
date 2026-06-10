@@ -29,6 +29,7 @@ _REPORT_DATA_KEYS = (
     "user_detail",
     "org_summary",
     "global_summary",
+    "login_form_outcomes",
     "monthly_ratings",
     "monthly_bundle_creations",
     "bundle_filter_breakdown",
@@ -93,6 +94,11 @@ _SECTION_HELP = {
     "logins_by_organisation": (
         "Number of Matomo visits, grouped by organisation, during the selected date "
         "range. A visit is treated as a login/browser session."
+    ),
+    "login_form_outcomes": (
+        "Login form events during the selected date range. Successful submissions "
+        "are restricted to identified users in the selected region. Attempts and "
+        "failures happen before authentication and therefore cover all regions."
     ),
     "monthly_average_star_ratings": (
         "Response-weighted average group and therapist ratings submitted during the "
@@ -179,6 +185,10 @@ def _overview_metrics(fetched_org_id):
 
 
 def _show_logins_by_organisation(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
+def _show_login_form_outcomes(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
@@ -334,6 +344,16 @@ def _get_activity_usage_by_id(
     return matomo.get_activity_usage_by_id(date_range)
 
 
+def _get_login_form_outcomes(
+    date_range: str,
+    allowed_user_ids: frozenset[str],
+):
+    global matomo
+    if not hasattr(matomo, "get_login_form_outcomes"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_login_form_outcomes(date_range, allowed_user_ids)
+
+
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
     # commit c814074: stale merger may only accept 2 args — check signature before calling
     # so unrelated TypeErrors inside build_global_summary are not silently swallowed.
@@ -446,6 +466,15 @@ def _last_login_user_ids(
 @st.cache_data(ttl=3600)
 def _cached_logins(date_range: str):
     return matomo.get_logins_by_date_range(date_range)
+
+
+@st.cache_data(ttl=3600)
+def _cached_login_form_outcomes(
+    date_range: str,
+    region: str,
+    allowed_user_ids: frozenset[str],
+):
+    return _get_login_form_outcomes(date_range, allowed_user_ids)
 
 
 @st.cache_data(ttl=3600)
@@ -621,6 +650,11 @@ if pull:
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
             logins = _cached_logins(date_range)
+            login_form_outcomes = (
+                _cached_login_form_outcomes(date_range, region, database_user_ids)
+                if selected_org_id is None
+                else None
+            )
             completed_sessions = _cached_completed_sessions(
                 date_range, region, selected_org_id
             )
@@ -706,6 +740,7 @@ if pull:
             "user_detail": user_detail,
             "org_summary": org_summary,
             "global_summary": global_summary,
+            "login_form_outcomes": login_form_outcomes,
             "monthly_ratings": monthly_ratings,
             "monthly_bundle_creations": monthly_bundle_creations,
             "bundle_filter_breakdown": bundle_filter_breakdown,
@@ -784,6 +819,31 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
+
+        if _show_login_form_outcomes(fetched_org_id):
+            st.markdown(
+                "**Login Form Outcomes**",
+                help=_SECTION_HELP["login_form_outcomes"],
+            )
+            login_form_outcomes = st.session_state.get(
+                "login_form_outcomes",
+                {"attempts": 0, "successes": 0, "failures": 0},
+            )
+            login_cols = st.columns(3)
+            for col, (key, label) in zip(
+                login_cols,
+                (
+                    ("attempts", "Attempts (all regions)"),
+                    ("successes", "Successes (selected region)"),
+                    ("failures", "Failures (all regions)"),
+                ),
+            ):
+                col.metric(label, login_form_outcomes[key])
+            st.caption(
+                "Attempts and failures are pre-authentication events, so they cannot "
+                "be filtered by region or attributed to specific organisations. "
+                "Do not use these counts for organisation-level conclusions."
+            )
 
         if _show_global_bundle_creation_chart(fetched_org_id):
             st.markdown(
