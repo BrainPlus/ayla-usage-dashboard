@@ -259,6 +259,7 @@ def test_monthly_ratings_join_answers_to_readable_question_labels(monkeypatch) -
         "eu", date(2026, 1, 1), date(2026, 6, 8)
     )
 
-    assert "question->>'question_en'                         AS question_label" in captured["sql"]
+    assert "question->>'question_en'" in captured["sql"]
+    assert "AS question_label" in captured["sql"]
     assert "question->>'id' = ans->>'questionId'" in captured["sql"]
     assert "question_label" in captured["sql"]

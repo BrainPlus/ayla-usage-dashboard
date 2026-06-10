@@ -41,7 +41,7 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 ### Step-by-step pull sequence (triggered by "Pull Data")
 
-1. **DB queries** (fast, ~1–2s) — `database.py` runs five SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, star ratings by org, monthly star ratings.
+1. **DB queries** (fast, ~1–2s) — `database.py` runs seven SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, monthly bundle creations, bundle filter breakdown, star ratings by org, monthly star ratings.
 
 2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` fetches shared-instance Matomo data for the selected reporting period. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
 
