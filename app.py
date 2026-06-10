@@ -35,6 +35,10 @@ _REPORT_DATA_KEYS = (
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
+    "step_completion_depth",
+    "talking_point_engagement",
+    "media_usage",
+    "engagement_events",
     "daily_visit_activity",
     "region",
     "date_range",
@@ -64,9 +68,10 @@ _OVERVIEW_METRICS = (
         "This is not limited by the selected date range.",
     ),
     (
-        "total_sessions_delivered",
-        "Sessions Delivered",
-        "Unique CST sessions delivered during the selected date range.",
+        "total_completed_sessions",
+        "Completed Sessions",
+        "Deliver-mode Session Complete events during the selected date range, "
+        "deduplicated by Matomo visit + bundle + session ID.",
     ),
     (
         "overall_groups_avg_rating",
@@ -114,17 +119,41 @@ _SECTION_HELP = {
         "organisation scope. Only activities completed in deliver mode are counted. "
         "Activity names come from the current Squidex catalogue."
     ),
+    "step_completion_depth": (
+        "How far facilitators progressed through each activity during the selected "
+        "reporting period and organisation scope, based on deliver-mode Step Complete "
+        "events. Low reach is a signal to investigate, not proof of a content problem."
+    ),
     "by_organisation": (
         "Organisation-level details. Logins, active users, session-duration metrics, "
-        "sessions delivered, activity averages, and ratings use the selected date "
+        "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
         "most recent recorded visit found within the last 365 days."
     ),
+    "talking_point_engagement": (
+        "Approximate ratio of Talking Point Expand Clicks to Step Forward Clicks "
+        "per activity, in deliver mode. Step Forward Click is used as a denominator "
+        "proxy because Matomo does not record every talking-point shown. Activities "
+        "with fewer than 10 forward-clicks in the period are excluded."
+    ),
+    "media_usage_by_org": (
+        "Audio and video interaction events per completed session for each "
+        "organisation, in deliver mode. Organisations with zero media interactions "
+        "in the period are shown explicitly. Low usage may reflect connectivity, "
+        "device setup, or content preferences — not necessarily a problem."
+    ),
+    "engagement_events_by_org": (
+        "Additional-activity acceptance and activity-replacement rates per "
+        "completed session for each organisation, in deliver mode. "
+        "'Additional activity' fires when a facilitator accepts the prompt to run "
+        "another main activity. Replacement rates track how often the default "
+        "activity was swapped for an alternative. The two metrics are separate."
+    ),
     "by_user": (
-        "User-level details. Logins, session-duration metrics, and completed activities "
-        "use the selected date range. User, email, and organisation are current "
-        "database details. Last login is the most recent recorded visit found within "
-        "the last 365 days."
+        "User-level details. Logins, session-duration metrics, completed sessions, "
+        "and completed activities use the selected date range. User, email, and "
+        "organisation are current database details. Last login is the most recent "
+        "recorded visit found within the last 365 days."
     ),
     "daily_visit_activity": (
         "Daily number of Matomo visits and unique users during the selected reporting period. "
@@ -420,8 +449,8 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_sessions_delivered(date_range: str, region: str, org_id):
-    return matomo.get_sessions_delivered(date_range, org_id=org_id)
+def _cached_completed_sessions(date_range: str, region: str, org_id):
+    return matomo.get_completed_sessions(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -454,6 +483,16 @@ def _cached_activity_usage(
 
 
 @st.cache_data(ttl=3600)
+def _cached_step_completion_depth(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_step_completion_depth(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
 def _cached_visit_durations(date_range: str, region: str, org_id):
     return matomo.get_visit_durations(date_range, org_id=org_id)
 
@@ -461,6 +500,36 @@ def _cached_visit_durations(date_range: str, region: str, org_id):
 @st.cache_data(ttl=3600)
 def _cached_visit_dates(date_range: str, region: str, org_id):
     return matomo.get_visit_dates(date_range, org_id=org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_talking_point_engagement(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_talking_point_engagement(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_media_usage(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_media_usage(date_range, allowed_user_ids, org_id)
+
+
+@st.cache_data(ttl=3600)
+def _cached_engagement_events(
+    date_range: str,
+    region: str,
+    org_id,
+    allowed_user_ids: frozenset[str] | None,
+):
+    return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -552,7 +621,9 @@ if pull:
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
             logins = _cached_logins(date_range)
-            sessions = _cached_sessions_delivered(date_range, region, selected_org_id)
+            completed_sessions = _cached_completed_sessions(
+                date_range, region, selected_org_id
+            )
             activity_completions = _cached_activity_completions(
                 date_range, region, selected_org_id
             )
@@ -560,21 +631,42 @@ if pull:
             activity_usage = _cached_activity_usage(
                 date_range, region, selected_org_id, database_user_ids
             )
+            step_completion_depth = _cached_step_completion_depth(
+                date_range, region, selected_org_id, database_user_ids
+            )
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
             visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
+            talking_point_engagement = _cached_talking_point_engagement(
+                date_range, region, selected_org_id, database_user_ids
+            )
+            media_usage = _cached_media_usage(
+                date_range, region, selected_org_id, database_user_ids
+            )
+            engagement_events = _cached_engagement_events(
+                date_range, region, selected_org_id, database_user_ids
+            )
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
         logins = _filter_to_database_users(logins, database_user_ids)
-        sessions = _filter_to_database_users(sessions, database_user_ids)
+        completed_sessions = _filter_to_database_users(
+            completed_sessions, database_user_ids
+        )
         activity_completions = _filter_to_database_users(
             activity_completions, database_user_ids
+        )
+        step_completion_depth = _filter_to_database_users(
+            step_completion_depth, database_user_ids
         )
         visit_durations = _filter_to_database_users(
             visit_durations, database_user_ids
         )
         visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
+        media_usage = _filter_to_database_users(media_usage, database_user_ids)
+        engagement_events = _filter_to_database_users(
+            engagement_events, database_user_ids
+        )
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(db_users)
@@ -597,9 +689,10 @@ if pull:
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
                 db_users, logins, last_login, visit_durations, activity_completions,
+                completed_sessions,
             )
             org_summary = merger.build_org_summary(
-                user_detail, sessions, star_ratings, org_user_counts,
+                user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
             global_summary = _build_global_summary(
@@ -619,6 +712,10 @@ if pull:
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
+            "step_completion_depth": step_completion_depth,
+            "talking_point_engagement": talking_point_engagement,
+            "media_usage": media_usage,
+            "engagement_events": engagement_events,
             "daily_visit_activity": daily_visit_activity,
             "region": region,
             "date_range": date_range,
@@ -761,9 +858,9 @@ else:
 
         st.divider()
         st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])
+        _activity_catalogue = st.session_state.get("activity_catalogue", {})
         if "activity_usage" in st.session_state:
             _activity_usage = st.session_state["activity_usage"]
-            _activity_catalogue = st.session_state.get("activity_catalogue", {})
             _activity_language_options = merger.activity_language_filter_options(_activity_usage)
             _activity_language_filter = (
                 st.selectbox(
@@ -821,6 +918,150 @@ else:
                         "could not be resolved to Squidex activity titles."
                     )
 
+        st.markdown(
+            "**Step Completion Depth**",
+            help=_SECTION_HELP["step_completion_depth"],
+        )
+        _step_completion_depth = st.session_state.get(
+            "step_completion_depth", pd.DataFrame()
+        )
+        if _step_completion_depth.empty:
+            st.info("No Step Complete events recorded in the selected scope.")
+        else:
+            _step_language_options = merger.activity_language_filter_options(
+                _step_completion_depth
+            )
+            _step_language_filter = (
+                st.selectbox(
+                    "Step completion language",
+                    _step_language_options,
+                    format_func=merger.format_activity_language_filter,
+                    key="step_completion_language_filter",
+                )
+                if len(_step_language_options) > 1
+                else "all"
+            )
+            _filtered_step_completion_depth = merger.filter_activity_usage_by_language(
+                _step_completion_depth,
+                _step_language_filter,
+            )
+            _step_completion_depth_table = merger.build_step_completion_depth_table(
+                _filtered_step_completion_depth,
+                _activity_catalogue,
+            )
+            st.dataframe(
+                _step_completion_depth_table,
+                use_container_width=True,
+                column_config=_column_config_for(
+                    _step_completion_depth_table,
+                    {
+                        "Activity Name": st.column_config.TextColumn("Activity Name"),
+                        "Language": st.column_config.TextColumn("Language"),
+                        "Activity Occurrences": st.column_config.NumberColumn(
+                            "Activity Occurrences", format="%d"
+                        ),
+                        "Avg Last Step Reached": st.column_config.NumberColumn(
+                            "Avg Last Step Reached", format="%.1f"
+                        ),
+                        "Completion Depth Distribution": st.column_config.TextColumn(
+                            "Completion Depth Distribution"
+                        ),
+                        "Least Reached Step(s)": st.column_config.TextColumn(
+                            "Least Reached Step(s)"
+                        ),
+                    },
+                ),
+                hide_index=True,
+            )
+
+        st.markdown(
+            "**Talking-Point Engagement (Approximate)**",
+            help=_SECTION_HELP["talking_point_engagement"],
+        )
+        _tp_engagement = st.session_state.get(
+            "talking_point_engagement", pd.DataFrame()
+        )
+        if _tp_engagement.empty:
+            st.info(
+                "No Talking Point Expand Click or Step Forward Click events "
+                "recorded in the selected scope."
+            )
+        else:
+            _tp_table = merger.build_talking_point_engagement_table(
+                _tp_engagement, _activity_catalogue
+            )
+            if _tp_table.empty:
+                st.info(
+                    "No activities had 10 or more Step Forward Clicks in the "
+                    "selected scope. Increase the date range to see results."
+                )
+            else:
+                st.caption(
+                    "Ratio of Talking Point Expand Clicks to Step Forward Clicks "
+                    "— approximate because Step Forward Click is used as a proxy "
+                    "denominator, not the exact number of talking points shown."
+                )
+                st.dataframe(
+                    _tp_table,
+                    use_container_width=True,
+                    column_config=_column_config_for(
+                        _tp_table,
+                        {
+                            "Activity Name": st.column_config.TextColumn("Activity Name"),
+                            "Language": st.column_config.TextColumn("Language"),
+                            "Expand Clicks": st.column_config.NumberColumn(
+                                "Expand Clicks", format="%d"
+                            ),
+                            "Step Forward Clicks": st.column_config.NumberColumn(
+                                "Step Forward Clicks", format="%d"
+                            ),
+                            "Approx. Engagement Ratio": st.column_config.NumberColumn(
+                                "Approx. Engagement Ratio",
+                                format="%.2f",
+                                help=(
+                                    "Talking Point Expand Clicks ÷ Step Forward Clicks. "
+                                    "Approximate: Step Forward Click is a proxy denominator "
+                                    "because Matomo does not record every talking point shown."
+                                ),
+                            ),
+                        },
+                    ),
+                    hide_index=True,
+                )
+
+        st.markdown("**Media Interactions by Activity**")
+        _media_usage_tab1 = st.session_state.get("media_usage", pd.DataFrame())
+        if _media_usage_tab1.empty:
+            st.info("No audio or video interaction events recorded in the selected scope.")
+        else:
+            _media_by_activity = merger.build_media_usage_by_activity(
+                _media_usage_tab1, _activity_catalogue
+            )
+            if _media_by_activity.empty:
+                st.info("No audio or video interaction events recorded in the selected scope.")
+            else:
+                st.dataframe(
+                    _media_by_activity,
+                    use_container_width=True,
+                    column_config=_column_config_for(
+                        _media_by_activity,
+                        {
+                            "Activity Name": st.column_config.TextColumn("Activity Name"),
+                            "Audio Interactions": st.column_config.NumberColumn(
+                                "Audio Interactions",
+                                format="%d",
+                                help="Total Audio Button/Play/Pause clicks in deliver mode",
+                            ),
+                            "Video Interactions": st.column_config.NumberColumn(
+                                "Video Interactions",
+                                format="%d",
+                                help="Total Video Button/Play/Pause clicks in deliver mode",
+                            ),
+                        },
+                    ),
+                    hide_index=True,
+                )
+
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
@@ -877,16 +1118,16 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
-                "sessions_delivered": st.column_config.NumberColumn(
+                "completed_sessions": st.column_config.NumberColumn(
                     help=(
-                        "Unique CST therapy sessions delivered in the selected period — counted as "
-                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
-                        "Different unit from visit-based duration metrics."
+                        "Deliver-mode Session Complete events in the selected period, "
+                        "deduplicated by Matomo visit + bundle + session ID. Repeat "
+                        "deliveries in separate visits are counted separately."
                     ),
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(
-                        "Total Activity Complete events divided by sessions delivered in the "
+                        "Total Activity Complete events divided by completed sessions in the "
                         "selected period. Note: the Activity Complete event fires on "
                         "forward navigation, so rapid click-through may inflate this count."
                     ),
@@ -905,6 +1146,103 @@ else:
                 ),
             }),
             use_container_width=True,
+        )
+
+        st.divider()
+        st.markdown(
+            "**Media Usage by Organisation**",
+            help=_SECTION_HELP["media_usage_by_org"],
+        )
+        _media_usage_raw = st.session_state.get("media_usage", pd.DataFrame())
+        _org_session_counts = org_summary[["organisation_name", "completed_sessions"]]
+        _media_table = merger.build_media_usage_by_org(
+            _media_usage_raw,
+            user_detail,
+            _org_session_counts,
+        )
+        st.dataframe(
+            _media_table,
+            use_container_width=True,
+            column_config=_column_config_for(
+                _media_table,
+                {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "completed_sessions": st.column_config.NumberColumn(
+                        "Completed Sessions", format="%d"
+                    ),
+                    "audio_clicks": st.column_config.NumberColumn(
+                        "Audio Interactions", format="%d",
+                        help="Total Audio Button/Play/Pause clicks in deliver mode"
+                    ),
+                    "video_clicks": st.column_config.NumberColumn(
+                        "Video Interactions", format="%d",
+                        help="Total Video Button/Play/Pause clicks in deliver mode"
+                    ),
+                    "audio_rate": st.column_config.NumberColumn(
+                        "Audio / Session",
+                        format="%.2f",
+                        help="Audio interactions per completed session",
+                    ),
+                    "video_rate": st.column_config.NumberColumn(
+                        "Video / Session",
+                        format="%.2f",
+                        help="Video interactions per completed session",
+                    ),
+                },
+            ),
+            hide_index=True,
+        )
+
+        st.divider()
+        st.markdown(
+            "**Activity Engagement by Organisation**",
+            help=_SECTION_HELP["engagement_events_by_org"],
+        )
+        _engagement_events_raw = st.session_state.get("engagement_events", pd.DataFrame())
+        _engagement_table = merger.build_engagement_events_by_org(
+            _engagement_events_raw,
+            user_detail,
+            _org_session_counts,
+        )
+        st.dataframe(
+            _engagement_table,
+            use_container_width=True,
+            column_config=_column_config_for(
+                _engagement_table,
+                {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "completed_sessions": st.column_config.NumberColumn(
+                        "Completed Sessions", format="%d"
+                    ),
+                    "additional_activity_rate": st.column_config.NumberColumn(
+                        "Additional Activity / Session",
+                        format="%.2f",
+                        help=(
+                            "How often facilitators accepted the prompt to run an "
+                            "additional main activity, per completed session."
+                        ),
+                    ),
+                    "main_replacement_rate": st.column_config.NumberColumn(
+                        "Main Activity Replacements / Session",
+                        format="%.2f",
+                        help="Change Main Activity Click events per completed session",
+                    ),
+                    "warmup_replacement_rate": st.column_config.NumberColumn(
+                        "Warmup Replacements / Session",
+                        format="%.2f",
+                        help="Change Warmup Activity Click events per completed session",
+                    ),
+                    "ro_replacement_rate": st.column_config.NumberColumn(
+                        "RO Replacements / Session",
+                        format="%.2f",
+                        help=(
+                            "Change Reality Orientation Activity Click events "
+                            "per completed session"
+                        ),
+                    ),
+                },
+            ),
+            hide_index=True,
         )
 
     # ── Tab 3: By User ────────────────────────────────────────────────────────
@@ -957,6 +1295,12 @@ else:
                     help=(
                         "Count of deliver-mode visits 20 minutes or under — treated as check-ins "
                         "or browsing"
+                    ),
+                ),
+                "completed_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-mode Session Complete events in the selected period, "
+                        "deduplicated by Matomo visit + bundle + session ID."
                     ),
                 ),
                 "activities_completed": st.column_config.NumberColumn(

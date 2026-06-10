@@ -16,6 +16,7 @@ def build_user_detail(
     last_login: pd.DataFrame,
     visit_durations: pd.DataFrame,
     activity_completions: pd.DataFrame,
+    completed_sessions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-user detail table by left-joining all Matomo metrics onto the
@@ -27,12 +28,14 @@ def build_user_detail(
         last_login:            user_id, last_login_date
         visit_durations:       user_id, visit_duration_seconds, has_deliver_action
         activity_completions:  user_id, activities_completed
+        completed_sessions:    visit_id, bundle_id, session_id, user_id
 
     Returns:
         DataFrame with columns:
             user_id, email, organisation_name, last_login_date,
             logins, avg_real_session_minutes,
-            median_prepare_minutes, short_visit_count, activities_completed
+            median_prepare_minutes, short_visit_count, completed_sessions,
+            activities_completed
     """
     df = db_users.copy()
     duration_metrics = _build_visit_duration_metrics(visit_durations)
@@ -44,6 +47,16 @@ def build_user_detail(
     df = df.merge(last_login, on="user_id", how="left")
     df = df.merge(duration_metrics, on="user_id", how="left")
     df = df.merge(activity_completions, on="user_id", how="left")
+    if completed_sessions is not None:
+        completed_by_user = (
+            _deduplicate_completed_sessions(completed_sessions)
+            .groupby("user_id")
+            .size()
+            .reset_index(name="completed_sessions")
+        )
+        df = df.merge(completed_by_user, on="user_id", how="left")
+    else:
+        df["completed_sessions"] = 0
 
     df["logins"] = df["logins"].fillna(0).astype(int)
     df["last_login_date"] = df["last_login_date"].replace("", pd.NA).fillna(_NO_USAGE)
@@ -58,6 +71,7 @@ def build_user_detail(
         .astype(float)
     )
     df["short_visit_count"] = df["short_visit_count"].fillna(0).astype(int)
+    df["completed_sessions"] = df["completed_sessions"].fillna(0).astype(int)
     df["activities_completed"] = df["activities_completed"].fillna(0).astype(int)
 
     df = df.sort_values(["organisation_name", "email"]).reset_index(drop=True)
@@ -71,13 +85,14 @@ def build_user_detail(
         "avg_real_session_minutes",
         "median_prepare_minutes",
         "short_visit_count",
+        "completed_sessions",
         "activities_completed",
     ]]
 
 
 def build_org_summary(
     user_detail: pd.DataFrame,
-    sessions_delivered: pd.DataFrame,
+    completed_sessions: pd.DataFrame,
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
     visit_durations: pd.DataFrame | None = None,
@@ -85,12 +100,11 @@ def build_org_summary(
     """
     Builds the per-organisation summary table.
 
-    Sessions delivered are counted as unique (bundle_id, session_id) pairs —
-    deduplicate before passing in if needed.
+    Completed sessions are deduplicated by (visit_id, bundle_id, session_id).
 
     Args:
         user_detail:            output of build_user_detail
-        sessions_delivered:     bundle_id, session_id, user_id
+        completed_sessions:     visit_id, bundle_id, session_id, user_id
         star_ratings:           organisation_name, target, avg_rating, total_responses
         org_user_counts:        organisation_name, user_count
         visit_durations:        user_id, visit_duration_seconds, has_deliver_action
@@ -101,7 +115,7 @@ def build_org_summary(
             organisation_name, total_users, active_users,
             logins, avg_real_session_minutes,
             median_prepare_minutes, min_real_session_minutes, max_real_session_minutes,
-            short_visit_count, sessions_delivered,
+            short_visit_count, completed_sessions,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
     # --- aggregate user_detail by org ---
@@ -130,24 +144,23 @@ def build_org_summary(
         on="organisation_name", how="left",
     )
 
-    # --- sessions delivered: unique (bundle_id, session_id) pairs per org ---
+    # --- completed sessions: unique (visit_id, bundle_id, session_id) per org ---
     def _session_counts(sessions_df: pd.DataFrame) -> pd.DataFrame:
         if sessions_df.empty:
             return pd.DataFrame(columns=["organisation_name", "sessions"])
         # Attach org name via user_detail
-        enriched = sessions_df.merge(
+        enriched = _deduplicate_completed_sessions(sessions_df).merge(
             user_detail[["user_id", "organisation_name"]].drop_duplicates(),
             on="user_id", how="left",
         )
         return (
-            enriched.drop_duplicates(subset=["organisation_name", "bundle_id", "session_id"])
-            .groupby("organisation_name")
+            enriched.groupby("organisation_name")
             .size()
             .reset_index(name="sessions")
         )
 
-    session_counts = _session_counts(sessions_delivered).rename(
-        columns={"sessions": "sessions_delivered"}
+    session_counts = _session_counts(completed_sessions).rename(
+        columns={"sessions": "completed_sessions"}
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
 
@@ -191,16 +204,18 @@ def build_org_summary(
         "total_users", "active_users",
         "logins",
         "short_visit_count",
-        "sessions_delivered",
+        "completed_sessions",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
 
-    denom = agg["sessions_delivered"].replace(0, pd.NA)
+    denom = agg["completed_sessions"].replace(0, pd.NA)
     agg["avg_activities_per_session"] = (
-        (agg["total_activities_completed"] / denom).fillna(0.0).round(1)
+        pd.to_numeric(agg["total_activities_completed"] / denom, errors="coerce")
+        .fillna(0.0)
+        .round(1)
     )
     agg = agg.drop(columns=["total_activities_completed"])
 
@@ -268,12 +283,22 @@ def build_org_summary(
         "min_real_session_minutes",
         "max_real_session_minutes",
         "short_visit_count",
-        "sessions_delivered",
+        "completed_sessions",
         "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",
     ]]
+
+
+def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
+    """Return one completed CST session per Matomo visit, bundle, and session."""
+    columns = ["visit_id", "bundle_id", "session_id", "user_id"]
+    if completed_sessions.empty:
+        return pd.DataFrame(columns=columns)
+    return completed_sessions.drop_duplicates(
+        subset=["visit_id", "bundle_id", "session_id"]
+    )
 
 
 def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame:
@@ -349,7 +374,7 @@ def build_global_summary(
             total_organisations (int)
             total_users (int)
             total_groups_created (int)
-            total_sessions_delivered (int)
+            total_completed_sessions (int)
             overall_groups_avg_rating (float)
             overall_therapists_avg_rating (float)
     """
@@ -375,7 +400,7 @@ def build_global_summary(
         "total_organisations": int(len(real_orgs)),
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
-        "total_sessions_delivered": int(org_summary["sessions_delivered"].sum()),
+        "total_completed_sessions": int(org_summary["completed_sessions"].sum()),
         "overall_groups_avg_rating": groups_average,
         "overall_therapists_avg_rating": therapists_average,
     }
@@ -539,6 +564,83 @@ def build_activity_usage_table(
     )
 
 
+def build_step_completion_depth_table(
+    step_completions: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Summarise completion depth for activities with recorded Step Complete events.
+
+    Completion depth is the highest completed step number in each activity
+    occurrence. Least-reached steps are calculated from unique observed step
+    completions per occurrence.
+    """
+    columns = [
+        "Activity Name",
+        "Language",
+        "Activity Occurrences",
+        "Avg Last Step Reached",
+        "Completion Depth Distribution",
+        "Least Reached Step(s)",
+    ]
+    if step_completions.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = step_completions.copy()
+    df["step_number"] = pd.to_numeric(df["step_number"], errors="coerce")
+    df = df.dropna(subset=["activity_instance_id", "activity_id", "step_number"])
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+
+    df["step_number"] = df["step_number"].astype(int)
+    df["Language"] = df["language"].map(_normalise_activity_language)
+    df = df.drop_duplicates(
+        ["activity_instance_id", "activity_id", "Language", "step_number"]
+    )
+
+    rows = []
+    for (activity_id, language), activity_rows in df.groupby(
+        ["activity_id", "Language"], dropna=False
+    ):
+        last_steps = activity_rows.groupby("activity_instance_id")["step_number"].max()
+        occurrence_count = int(last_steps.size)
+        depth_counts = last_steps.value_counts().sort_index()
+        reach_counts = (
+            activity_rows.groupby("step_number")["activity_instance_id"]
+            .nunique()
+            .sort_index()
+        )
+        least_reached_count = int(reach_counts.min())
+        least_reached_steps = reach_counts[reach_counts == least_reached_count].index
+
+        rows.append(
+            {
+                "Activity Name": activity_catalogue.get(str(activity_id), str(activity_id)),
+                "Language": format_activity_language_filter(language),
+                "Activity Occurrences": occurrence_count,
+                "Avg Last Step Reached": round(float(last_steps.mean()), 1),
+                "Completion Depth Distribution": "; ".join(
+                    f"Step {step}: {count} ({count / occurrence_count:.0%})"
+                    for step, count in depth_counts.items()
+                ),
+                "Least Reached Step(s)": ", ".join(
+                    f"Step {step} ({least_reached_count}/{occurrence_count}, "
+                    f"{least_reached_count / occurrence_count:.0%})"
+                    for step in least_reached_steps
+                ),
+            }
+        )
+
+    return (
+        pd.DataFrame(rows, columns=columns)
+        .sort_values(
+            ["Activity Occurrences", "Activity Name", "Language"],
+            ascending=[False, True, True],
+        )
+        .reset_index(drop=True)
+    )
+
+
 def activity_language_filter_options(activity_usage: pd.DataFrame) -> list[str]:
     """Return available activity language filter values, with all languages first."""
     if activity_usage.empty or "language" not in activity_usage.columns:
@@ -655,6 +757,286 @@ def build_daily_visit_activity(
     result["visits"] = result["visits"].fillna(0).astype(int)
     result["unique_users"] = result["unique_users"].fillna(0).astype(int)
     return result
+
+
+def build_talking_point_engagement_table(
+    engagement: pd.DataFrame,
+    activity_catalogue: dict,
+    min_forward_clicks: int = 10,
+) -> pd.DataFrame:
+    """
+    Build per-activity talking-point engagement ratio table.
+
+    Ratio = Talking Point Expand Clicks / Step Forward Clicks.
+    Activities with fewer than min_forward_clicks forward-clicks are excluded
+    to avoid noisy ratios. The ratio is an approximation because Step Forward Click
+    is used as a denominator proxy, not the true talking-points-shown count.
+
+    Args:
+        engagement:          activity_id, language, expand_clicks, forward_clicks
+        activity_catalogue:  dict mapping activity_id → title
+        min_forward_clicks:  minimum Step Forward Click count to include
+
+    Returns:
+        DataFrame with columns: Activity Name, Language, Expand Clicks,
+        Step Forward Clicks, Approx. Engagement Ratio
+    """
+    columns = [
+        "Activity Name",
+        "Language",
+        "Expand Clicks",
+        "Step Forward Clicks",
+        "Approx. Engagement Ratio",
+    ]
+    if engagement.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = engagement.copy()
+    df["Language"] = df["language"].map(_normalise_activity_language)
+    agg = (
+        df.groupby(["activity_id", "Language"], dropna=False)
+        .agg(
+            expand_clicks=("expand_clicks", "sum"),
+            forward_clicks=("forward_clicks", "sum"),
+        )
+        .reset_index()
+    )
+    agg = agg[agg["forward_clicks"] >= min_forward_clicks].copy()
+    if agg.empty:
+        return pd.DataFrame(columns=columns)
+
+    agg["Activity Name"] = (
+        agg["activity_id"].map(activity_catalogue).fillna(agg["activity_id"])
+    )
+    agg["Language"] = agg["Language"].map(format_activity_language_filter)
+    agg["Approx. Engagement Ratio"] = (
+        agg["expand_clicks"] / agg["forward_clicks"]
+    ).round(2)
+    return (
+        agg.rename(
+            columns={
+                "expand_clicks": "Expand Clicks",
+                "forward_clicks": "Step Forward Clicks",
+            }
+        )[columns]
+        .sort_values("Step Forward Clicks", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def build_media_usage_by_activity(
+    media_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Aggregate total audio and video interactions per activity in deliver mode.
+
+    Args:
+        media_usage:        user_id, activity_id, audio_clicks, video_clicks
+        activity_catalogue: dict mapping activity_id → title
+
+    Returns:
+        DataFrame with columns: Activity Name, Audio Interactions, Video Interactions
+        Sorted by total interactions descending.
+    """
+    columns = ["Activity Name", "Audio Interactions", "Video Interactions"]
+    if media_usage.empty or "activity_id" not in media_usage.columns:
+        return pd.DataFrame(columns=columns)
+
+    df = media_usage.copy()
+    agg = (
+        df.groupby("activity_id", dropna=False)
+        .agg(
+            audio_interactions=("audio_clicks", "sum"),
+            video_interactions=("video_clicks", "sum"),
+        )
+        .reset_index()
+    )
+    agg = agg[(agg["audio_interactions"] > 0) | (agg["video_interactions"] > 0)]
+    if agg.empty:
+        return pd.DataFrame(columns=columns)
+
+    agg["Activity Name"] = (
+        agg["activity_id"].astype(str).map(activity_catalogue).fillna(agg["activity_id"])
+    )
+    return (
+        agg.rename(columns={
+            "audio_interactions": "Audio Interactions",
+            "video_interactions": "Video Interactions",
+        })[columns]
+        .assign(_total=lambda d: d["Audio Interactions"] + d["Video Interactions"])
+        .sort_values("_total", ascending=False)
+        .drop(columns="_total")
+        .reset_index(drop=True)
+    )
+
+
+def build_media_usage_by_org(
+    media_usage: pd.DataFrame,
+    user_detail: pd.DataFrame,
+    org_session_counts: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build per-organisation audio and video interaction rates.
+
+    All organisations from user_detail are included; those with zero media
+    interactions are shown explicitly rather than excluded.
+
+    Rate = interactions / completed sessions (0.0 when no sessions recorded).
+
+    Args:
+        media_usage:        user_id, activity_id, audio_clicks, video_clicks
+        user_detail:        output of build_user_detail (must contain organisation_name)
+        org_session_counts: organisation_name, completed_sessions (from org_summary)
+
+    Returns:
+        DataFrame with columns: organisation_name, completed_sessions,
+        audio_clicks, video_clicks, audio_rate, video_rate
+    """
+    columns = [
+        "organisation_name",
+        "completed_sessions",
+        "audio_clicks",
+        "video_clicks",
+        "audio_rate",
+        "video_rate",
+    ]
+    all_orgs = user_detail[["organisation_name"]].drop_duplicates().copy()
+    org_user_map = (
+        user_detail[["user_id", "organisation_name"]]
+        .drop_duplicates()
+        .assign(user_id=lambda d: d["user_id"].astype(str))
+    )
+
+    result = all_orgs.merge(
+        org_session_counts[["organisation_name", "completed_sessions"]],
+        on="organisation_name", how="left",
+    )
+    result["completed_sessions"] = result["completed_sessions"].fillna(0).astype(int)
+
+    if media_usage is not None and not media_usage.empty:
+        media = media_usage.copy()
+        media["user_id"] = media["user_id"].astype(str)
+        media_with_org = media.merge(org_user_map, on="user_id", how="left")
+        media_by_org = (
+            media_with_org.groupby("organisation_name")
+            .agg(
+                audio_clicks=("audio_clicks", "sum"),
+                video_clicks=("video_clicks", "sum"),
+            )
+            .reset_index()
+        )
+        result = result.merge(media_by_org, on="organisation_name", how="left")
+
+    for col in ("audio_clicks", "video_clicks"):
+        if col not in result.columns:
+            result[col] = 0
+        result[col] = result[col].fillna(0).astype(int)
+
+    denom = result["completed_sessions"].replace(0, pd.NA)
+    result["audio_rate"] = (result["audio_clicks"] / denom).fillna(0.0).round(2)
+    result["video_rate"] = (result["video_clicks"] / denom).fillna(0.0).round(2)
+
+    is_unassigned = result["organisation_name"] == _NO_ORG
+    return (
+        pd.concat([
+            result[~is_unassigned].sort_values("organisation_name"),
+            result[is_unassigned],
+        ])
+        .reset_index(drop=True)[columns]
+    )
+
+
+def build_engagement_events_by_org(
+    engagement_events: pd.DataFrame,
+    user_detail: pd.DataFrame,
+    org_session_counts: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build per-organisation additional-activity and activity-replacement rates.
+
+    All organisations from user_detail are included. Rates are expressed as
+    events per completed session so organisations with different session volumes
+    are comparable.
+
+    Args:
+        engagement_events:  user_id, additional_activity_count, main_replacements,
+                            warmup_replacements, ro_replacements
+        user_detail:        output of build_user_detail
+        org_session_counts: organisation_name, completed_sessions (from org_summary)
+
+    Returns:
+        DataFrame with columns: organisation_name, completed_sessions,
+        additional_activity_rate, main_replacement_rate,
+        warmup_replacement_rate, ro_replacement_rate
+    """
+    columns = [
+        "organisation_name",
+        "completed_sessions",
+        "additional_activity_rate",
+        "main_replacement_rate",
+        "warmup_replacement_rate",
+        "ro_replacement_rate",
+    ]
+    all_orgs = user_detail[["organisation_name"]].drop_duplicates().copy()
+    org_user_map = (
+        user_detail[["user_id", "organisation_name"]]
+        .drop_duplicates()
+        .assign(user_id=lambda d: d["user_id"].astype(str))
+    )
+
+    result = all_orgs.merge(
+        org_session_counts[["organisation_name", "completed_sessions"]],
+        on="organisation_name", how="left",
+    )
+    result["completed_sessions"] = result["completed_sessions"].fillna(0).astype(int)
+
+    raw_cols = (
+        "additional_activity_count",
+        "main_replacements",
+        "warmup_replacements",
+        "ro_replacements",
+    )
+
+    if engagement_events is not None and not engagement_events.empty:
+        events = engagement_events.copy()
+        events["user_id"] = events["user_id"].astype(str)
+        events_with_org = events.merge(org_user_map, on="user_id", how="left")
+        events_by_org = (
+            events_with_org.groupby("organisation_name")
+            .agg(**{c: (c, "sum") for c in raw_cols})
+            .reset_index()
+        )
+        result = result.merge(events_by_org, on="organisation_name", how="left")
+
+    for col in raw_cols:
+        if col not in result.columns:
+            result[col] = 0
+        result[col] = result[col].fillna(0).astype(int)
+
+    denom = result["completed_sessions"].replace(0, pd.NA)
+    result["additional_activity_rate"] = (
+        result["additional_activity_count"] / denom
+    ).fillna(0.0).round(2)
+    result["main_replacement_rate"] = (
+        result["main_replacements"] / denom
+    ).fillna(0.0).round(2)
+    result["warmup_replacement_rate"] = (
+        result["warmup_replacements"] / denom
+    ).fillna(0.0).round(2)
+    result["ro_replacement_rate"] = (
+        result["ro_replacements"] / denom
+    ).fillna(0.0).round(2)
+    result = result.drop(columns=list(raw_cols))
+
+    is_unassigned = result["organisation_name"] == _NO_ORG
+    return (
+        pd.concat([
+            result[~is_unassigned].sort_values("organisation_name"),
+            result[is_unassigned],
+        ])
+        .reset_index(drop=True)[columns]
+    )
 
 
 def _normalise_activity_language(value: object) -> str:

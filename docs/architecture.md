@@ -68,7 +68,7 @@ New raw Matomo aggregate paths must follow the same pattern. The selected organi
 | Method | Used by | Why |
 |--------|---------|-----|
 | `UserId.getUsers` | `get_logins_by_date_range` | Fastest way to get visit counts per user ID; CSV format handles large result sets reliably |
-| `Live.getLastVisitsDetails` | `get_last_login_per_user`, `get_avg_visit_duration_by_user`, `get_sessions_delivered`, `get_activity_completions_per_user` | Only method that exposes raw visit and action detail including custom dimensions as `dimensionN` keys |
+| `Live.getLastVisitsDetails` | `get_last_login_per_user`, `get_visit_durations`, `get_completed_sessions`, `get_activity_completions_per_user`, `get_activity_usage_by_id`, `get_step_completion_depth`, `get_talking_point_engagement`, `get_media_usage`, `get_engagement_events` | Only method that exposes raw visit and action detail including custom dimensions as `dimensionN` keys |
 | `VisitsSummary.get` | *(removed)* | Was used for avg duration but returned 0 for many users; replaced by bulk `Live.getLastVisitsDetails` |
 
 `Live.getLastVisitsDetails` is used for most calls because it returns the full visit object including `actionDetails`, which is where custom dimensions (`dimensionN`) are set per event. The other aggregate endpoints (`Events.getCategory`, `VisitsSummary.get`) do not expose per-action dimension values.
@@ -116,11 +116,6 @@ The root cause: the Matomo Live API (`Live.getLastVisitsDetails`) returns custom
 
 The fix is to fetch all visits unfiltered and check `dimension10` in Python using `_extract_dimension(action, "10") == "false"` before including any action in the results.
 
-This filter is applied in:
-- `matomo.get_sessions_delivered` — per action, before recording a `(bundle_id, session_id)` pair
-- `matomo.get_activity_completions_per_user` — per action, before counting an "Activity Complete" event
+This filter is applied in every matomo.py function that processes individual actions, using `_extract_dimension(action, "10") == "false"` before including any action in the results. It is **not** applied in visit-level functions (`get_logins_by_date_range`, `get_last_login_per_user`, `get_visit_durations`, `get_visit_dates`) where the unit of measurement is the visit itself.
 
-It is **not** applied in:
-- `get_logins_by_date_range` — login counts are visit-level, not action-level
-- `get_last_login_per_user` — last login date is visit-level
-- `get_avg_visit_duration_by_user` — visit duration is visit-level; both modes count as time spent in the app
+Affected action-level functions: `get_completed_sessions`, `get_activity_completions_per_user`, `get_activity_usage_by_id`, `get_step_completion_depth`, `get_talking_point_engagement`, `get_media_usage`, `get_engagement_events`.

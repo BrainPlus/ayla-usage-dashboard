@@ -8,7 +8,7 @@ Two sentinel constants are used throughout:
 
 ---
 
-### build_user_detail(db_users, logins, last_login, visit_durations, activity_completions)
+### build_user_detail(db_users, logins, last_login, visit_durations, activity_completions, completed_sessions=None)
 
 **Purpose:** Builds the per-user detail table by left-joining all Matomo metrics onto the canonical DB user list.
 
@@ -18,6 +18,7 @@ Two sentinel constants are used throughout:
 - `last_login` *(DataFrame)* — `user_id`, `last_login_date` from `matomo.get_last_login_per_user`
 - `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations`
 - `activity_completions` *(DataFrame)* — `user_id`, `activities_completed` from `matomo.get_activity_completions_per_user`
+- `completed_sessions` *(DataFrame, optional)* — `visit_id`, `bundle_id`, `session_id`, `user_id` from `matomo.get_completed_sessions`
 
 **Returns:** DataFrame with columns:
 - `user_id` (str)
@@ -28,19 +29,20 @@ Two sentinel constants are used throughout:
 - `avg_real_session_minutes` (float, 1 decimal) — mean duration of deliver visits >20 min
 - `median_prepare_minutes` (float, 1 decimal) — median duration of prepare-only visits
 - `short_visit_count` (int) — deliver visits ≤20 min
+- `completed_sessions` (int) — deliver-mode Session Complete events, deduped by (visit_id, bundle_id, session_id)
 - `activities_completed` (int) — 0 if not in Matomo
 
 **Notes:** Duration metrics are computed by `_build_visit_duration_metrics`. All joins are left joins on `db_users`, ensuring every DB user has a row even if absent from Matomo. Rows are sorted by `organisation_name` then `email`.
 
 ---
 
-### build_org_summary(user_detail, sessions_delivered, star_ratings, org_user_counts, visit_durations)
+### build_org_summary(user_detail, completed_sessions, star_ratings, org_user_counts, visit_durations=None)
 
 **Purpose:** Builds the per-organisation summary table by aggregating user_detail and joining session, rating, user-count, and raw visit data.
 
 **Parameters:**
 - `user_detail` *(DataFrame)* — output of `build_user_detail`
-- `sessions_delivered` *(DataFrame)* — `bundle_id`, `session_id`, `user_id` from `matomo.get_sessions_delivered` for the selected period
+- `completed_sessions` *(DataFrame)* — `visit_id`, `bundle_id`, `session_id`, `user_id` from `matomo.get_completed_sessions`
 - `star_ratings` *(DataFrame)* — `organisation_name`, `target`, `avg_rating`, `total_responses` from `database.get_star_ratings_by_org`
 - `org_user_counts` *(DataFrame)* — `organisation_name`, `user_count` from `database.get_org_user_counts`
 - `visit_durations` *(DataFrame)* — `user_id`, `visit_duration_seconds`, `has_deliver_action` from `matomo.get_visit_durations` (raw, not pre-aggregated)
@@ -55,8 +57,8 @@ Two sentinel constants are used throughout:
 - `min_real_session_minutes` (float, 1 decimal) — shortest individual real session (raw visit >20 min) across all users in the org; 0.0 when `visit_durations` is absent
 - `max_real_session_minutes` (float, 1 decimal) — longest individual real session across all users in the org; 0.0 when `visit_durations` is absent
 - `short_visit_count` (int) — deliver visits ≤20 min across all users in the org
-- `sessions_delivered` (int)
-- `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `sessions_delivered`; 0.0 if no sessions
+- `completed_sessions` (int) — deduplicated on `(visit_id, bundle_id, session_id)`
+- `avg_activities_per_session` (float, 1 decimal) — org total `activities_completed` ÷ `completed_sessions`; 0.0 if no sessions
 - `last_login_date` (str) — most recent login across all users; `"No tracked usage"` if none
 - `groups_avg_rating` (float, 2 decimal) — 0.0 if no data
 - `therapists_avg_rating` (float, 2 decimal) — 0.0 if no data
@@ -64,7 +66,7 @@ Two sentinel constants are used throughout:
 **Notes:**
 - **Avg/min/max session time:** all three are computed from raw `visit_durations` when available, so `avg` is visit-count-weighted rather than a mean of per-user averages. Joined to org via `user_detail[user_id → organisation_name]`. See ADR-0004.
 - **Median prepare time:** median is used (not mean) because prepare visits are skewed by occasional long sessions. See ADR-0003.
-- **Sessions delivered:** deduplicated on `(organisation_name, bundle_id, session_id)` — a session delivered by two users in the same org counts once.
+- **Completed sessions:** deduplicated on `(visit_id, bundle_id, session_id)` — repeat deliveries in separate Matomo visits are counted separately.
 - **Star ratings:** pivoted from long to wide; both columns guaranteed to exist even if one target has no data.
 - **Sort order:** alphabetical; `"Unassigned / No organisation"` always last.
 
@@ -138,3 +140,66 @@ Sorted descending by `Completions` (most used first).
 - `month` (str)
 - `target` (str)
 - `avg_rating` (float, 2 decimal)
+
+---
+
+### build_step_completion_depth_table(step_completions, activity_catalogue)
+
+**Purpose:** Summarises per-activity completion depth from deliver-mode Step Complete events.
+
+**Parameters:**
+- `step_completions` *(DataFrame)* — `activity_instance_id`, `user_id`, `activity_id`, `language`, `step_number` from `matomo.get_step_completion_depth`
+- `activity_catalogue` *(dict)* — `{squidex_id: title}`
+
+**Returns:** DataFrame with columns: `Activity Name`, `Language`, `Activity Occurrences`, `Avg Last Step Reached`, `Completion Depth Distribution`, `Least Reached Step(s)`.
+
+---
+
+### build_talking_point_engagement_table(engagement, activity_catalogue, min_forward_clicks=10)
+
+**Purpose:** Builds approximate talking-point engagement ratios per activity.
+
+**Parameters:**
+- `engagement` *(DataFrame)* — `activity_id`, `language`, `expand_clicks`, `forward_clicks` from `matomo.get_talking_point_engagement`
+- `activity_catalogue` *(dict)* — `{squidex_id: title}`
+- `min_forward_clicks` *(int)* — activities with fewer forward-clicks are excluded to avoid noisy ratios
+
+**Returns:** DataFrame with columns: `Activity Name`, `Language`, `Expand Clicks`, `Step Forward Clicks`, `Approx. Engagement Ratio`.
+
+---
+
+### build_media_usage_by_activity(media_usage, activity_catalogue)
+
+**Purpose:** Aggregates audio and video interaction totals per activity.
+
+**Parameters:**
+- `media_usage` *(DataFrame)* — `user_id`, `activity_id`, `audio_clicks`, `video_clicks` from `matomo.get_media_usage`
+- `activity_catalogue` *(dict)* — `{squidex_id: title}`
+
+**Returns:** DataFrame with columns: `Activity Name`, `Audio Interactions`, `Video Interactions`. Activities with zero interactions are excluded.
+
+---
+
+### build_media_usage_by_org(media_usage, user_detail, org_session_counts)
+
+**Purpose:** Builds per-organisation audio and video interaction rates. All organisations are included even with zero interactions.
+
+**Parameters:**
+- `media_usage` *(DataFrame)* — `user_id`, `activity_id`, `audio_clicks`, `video_clicks`
+- `user_detail` *(DataFrame)* — output of `build_user_detail`
+- `org_session_counts` *(DataFrame)* — `organisation_name`, `completed_sessions` (slice of `org_summary`)
+
+**Returns:** DataFrame with columns: `organisation_name`, `completed_sessions`, `audio_clicks`, `video_clicks`, `audio_rate`, `video_rate`.
+
+---
+
+### build_engagement_events_by_org(engagement_events, user_detail, org_session_counts)
+
+**Purpose:** Builds per-organisation additional-activity and activity-replacement rates. All organisations are included.
+
+**Parameters:**
+- `engagement_events` *(DataFrame)* — `user_id`, `additional_activity_count`, `main_replacements`, `warmup_replacements`, `ro_replacements` from `matomo.get_engagement_events`
+- `user_detail` *(DataFrame)* — output of `build_user_detail`
+- `org_session_counts` *(DataFrame)* — `organisation_name`, `completed_sessions` (slice of `org_summary`)
+
+**Returns:** DataFrame with columns: `organisation_name`, `completed_sessions`, `additional_activity_rate`, `main_replacement_rate`, `warmup_replacement_rate`, `ro_replacement_rate`.

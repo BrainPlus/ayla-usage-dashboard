@@ -39,12 +39,14 @@ def build_methodology_df(
             "Count of deliver visits lasting 20 minutes or less",
         ),
         (
-            "Sessions delivered",
-            "Unique (bundleId + sessionId) pairs from delivered sessions only (editMode=false)",
+            "Completed sessions",
+            "Deliver-mode Session Complete events, deduplicated by "
+            "(Matomo visitId + bundleId + sessionId). Repeat deliveries in separate "
+            "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
             "Avg activities per session",
-            "Total Activity Complete events divided by sessions delivered in the selected period. "
+            "Total Activity Complete events divided by completed sessions in the selected period. "
             "Note: fires on forward navigation — rapid click-through may inflate this count.",
         ),
         ("Last login date", "Most recent recorded Matomo visit date"),
@@ -59,6 +61,29 @@ def build_methodology_df(
         (
             "Activities completed",
             "Count of Activity Complete events in Matomo (delivered sessions only)",
+        ),
+        (
+            "Approx. Engagement Ratio",
+            "Talking Point Expand Clicks divided by Step Forward Clicks per activity in deliver mode. "
+            "Step Forward Click is a proxy denominator — Matomo does not record every talking point shown.",
+        ),
+        (
+            "Audio / Session",
+            "Audio interaction events (Button/Play/Pause clicks) per completed session in deliver mode, per organisation.",
+        ),
+        (
+            "Video / Session",
+            "Video interaction events (Button/Play/Pause clicks) per completed session in deliver mode, per organisation.",
+        ),
+        (
+            "Additional Activity / Session",
+            "How often facilitators accepted the prompt to run an additional main activity, "
+            "per completed session in deliver mode.",
+        ),
+        (
+            "Replacement rates",
+            "Change Activity Click events (main / warmup / reality orientation) per completed session "
+            "in deliver mode, per organisation.",
         ),
     ]
     if org_filter_name is not None:

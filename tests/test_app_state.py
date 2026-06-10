@@ -120,12 +120,17 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "group_feedback_by_question",
         "therapist_feedback_by_question",
         "activity_usage",
+        "step_completion_depth",
+        "talking_point_engagement",
+        "media_usage_by_org",
+        "engagement_events_by_org",
         "daily_visit_activity",
         "by_organisation",
         "by_user",
     }
     assert all(app._SECTION_HELP.values())
     assert "selected date range" in app._SECTION_HELP["activity_usage"]
+    assert "signal to investigate" in app._SECTION_HELP["step_completion_depth"]
 
 
 def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:

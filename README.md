@@ -12,7 +12,7 @@ Live app: https://ayla-usage-dashboard.streamlit.app
 
 ### Global Overview
 - Total organisations, users, and groups created
-- Sessions delivered in the selected reporting period
+- Completed sessions in the selected reporting period
 - Overall average star ratings (group and therapist)
 - Logins by organisation bar chart
 - Daily visit activity line chart (visits and unique users per day)
@@ -22,7 +22,7 @@ Live app: https://ayla-usage-dashboard.streamlit.app
 - Total users and active users (2+ logins in the selected period)
 - Logins in the selected reporting period
 - Average session duration
-- Sessions delivered in the selected reporting period
+- Completed sessions in the selected reporting period
 - Average group and therapist star ratings
 - Last login date
 
@@ -44,7 +44,7 @@ Download a `.xlsx` report with Organisation Summary, User Detail, Monthly Rating
 | File | Purpose |
 |------|---------|
 | `app.py` | Streamlit UI — sidebar, tabs, data fetching orchestration, download button |
-| `matomo.py` | All Matomo API calls (logins, sessions delivered, activity completions, visit duration, last login) |
+| `matomo.py` | All Matomo API calls (logins, completed sessions, activity completions, visit duration, last login) |
 | `database.py` | All PostgreSQL queries (users, organisations, bundles, star ratings) |
 | `merger.py` | Pandas joins and aggregations — combines Matomo and DB data into display-ready DataFrames |
 | `exporter.py` | Excel export — builds an in-memory `.xlsx` with auto-sized columns |
@@ -136,7 +136,7 @@ To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automati
 
 ## Important Notes
 
-**Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level. This excludes Prepare (edit) mode and ensures only real delivered sessions are counted. This filter is applied in Python after fetching raw visit data from the Live API, not as a Matomo segment, because the segment approach was found to return 0 results.
+**Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level. This excludes Prepare (edit) mode. Completed-session and step-depth queries also apply the required `customDimension10==false` Matomo segment before enforcing the action-level filter.
 
 **Regional filtering for raw Matomo aggregates** — Matomo is shared by UK and EU. Any raw Matomo data that is aggregated without first being joined to database users must be restricted to user IDs from the selected region's database before aggregation.
 

@@ -15,14 +15,15 @@ import matomo
     "function_name",
     [
         "get_visit_durations",
-        "get_sessions_delivered",
+        "get_completed_sessions",
         "get_activity_completions_per_user",
         "get_activity_usage_by_id",
+        "get_step_completion_depth",
         "get_visit_dates",
     ],
 )
 @pytest.mark.parametrize("org_id", [196, None, "unassigned"])
-def test_live_visit_queries_never_apply_organisation_segment(
+def test_live_visit_queries_apply_only_required_source_segments(
     monkeypatch, function_name, org_id
 ) -> None:
     captured = {}
@@ -38,53 +39,91 @@ def test_live_visit_queries_never_apply_organisation_segment(
     assert "segment" not in captured["params"]
 
 
-def test_get_sessions_delivered_counts_all_deliver_visits_regardless_of_duration(monkeypatch) -> None:
+def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(
+    monkeypatch,
+) -> None:
     def fake_matomo_get(params: dict) -> list[dict]:
         return [
             {
+                "idVisit": "v1",
                 "userId": "u1",
                 "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS + 1,
                 "actionDetails": [
-                    {"dimension10": "false", "dimension14": "b1", "dimension5": "s1"},
-                    {"dimension10": "false", "dimension14": "b1", "dimension5": "s1"},
-                    {"dimension10": "true", "dimension14": "b2", "dimension5": "s2"},
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "true",
+                        "dimension14": "b2",
+                        "dimension5": "s2",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Start",
+                        "dimension10": "false",
+                        "dimension14": "b3",
+                        "dimension5": "s3",
+                    },
                 ],
             },
             {
-                "userId": "u2",
+                "idVisit": "v2",
+                "userId": "u1",
                 "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS,
                 "actionDetails": [
-                    {"dimension10": "false", "dimension14": "b3", "dimension5": "s3"},
-                ],
-            },
-            {
-                "userId": "u3",
-                "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS + 1,
-                "actionDetails": [
-                    {"dimension10": "true", "dimension14": "b4", "dimension5": "s4"},
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
                 ],
             },
         ]
 
     monkeypatch.setattr(matomo, "matomo_get", fake_matomo_get)
 
-    result = matomo.get_sessions_delivered("2026-01-01,2026-01-31")
+    result = matomo.get_completed_sessions("2026-01-01,2026-01-31")
 
     expected = pd.DataFrame(
         [
-            {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
-            {"bundle_id": "b3", "session_id": "s3", "user_id": "u2"},
+            {
+                "visit_id": "v1",
+                "bundle_id": "b1",
+                "session_id": "s1",
+                "user_id": "u1",
+            },
+            {
+                "visit_id": "v2",
+                "bundle_id": "b1",
+                "session_id": "s1",
+                "user_id": "u1",
+            },
         ],
-        columns=["bundle_id", "session_id", "user_id"],
+        columns=["visit_id", "bundle_id", "session_id", "user_id"],
     )
     pd.testing.assert_frame_equal(result, expected)
 
 
-def test_get_sessions_delivered_raises_for_non_list_response(monkeypatch) -> None:
+def test_get_completed_sessions_raises_for_non_list_response(monkeypatch) -> None:
     import pytest
     monkeypatch.setattr(matomo, "matomo_get", lambda params: {"error": "bad response"})
     with pytest.raises(RuntimeError, match="non-list response"):
-        matomo.get_sessions_delivered("2026-01-01,2026-01-31")
+        matomo.get_completed_sessions("2026-01-01,2026-01-31")
 
 
 def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:
@@ -201,6 +240,117 @@ def test_get_activity_usage_by_id_non_list_raises(monkeypatch) -> None:
     monkeypatch.setattr(matomo, "matomo_get", lambda params: {"error": "oops"})
     with pytest.raises(RuntimeError, match="non-list response"):
         matomo.get_activity_usage_by_id("2024-01-01,2024-01-31")
+
+
+def test_get_step_completion_depth_numbers_unique_steps_in_chronological_order(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-2",
+                    "dimension2": "en-GB",
+                    "timestamp": 20,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-1",
+                    "dimension2": "en-GB",
+                    "timestamp": 10,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-2",
+                    "dimension2": "en-GB",
+                    "timestamp": 30,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "true",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-3",
+                    "timestamp": 40,
+                },
+            ],
+        }
+    ]
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", lambda params, page_size: visits)
+
+    result = matomo.get_step_completion_depth(
+        "2024-01-01,2024-01-31", frozenset({"u1"})
+    )
+
+    assert result.to_dict("records") == [
+        {
+            "activity_instance_id": "v1|b1|s1|a1",
+            "user_id": "u1",
+            "activity_id": "a1",
+            "language": "en-GB",
+            "step_number": 1,
+        },
+        {
+            "activity_instance_id": "v1|b1|s1|a1",
+            "user_id": "u1",
+            "activity_id": "a1",
+            "language": "en-GB",
+            "step_number": 2,
+        },
+    ]
+
+
+def test_get_step_completion_depth_excludes_users_outside_selected_scope(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "idVisit": f"v-{user_id}",
+            "userId": user_id,
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension5": "s1",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-1",
+                    "dimension14": "b1",
+                }
+            ],
+        }
+        for user_id in ("u1", "u2")
+    ]
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", lambda params, page_size: visits)
+
+    result = matomo.get_step_completion_depth(
+        "2024-01-01,2024-01-31", frozenset({"u2"})
+    )
+
+    assert list(result["user_id"]) == ["u2"]
 
 
 # ── _fetch_all_live_visits pagination ─────────────────────────────────────────
