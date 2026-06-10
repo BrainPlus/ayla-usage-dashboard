@@ -234,6 +234,46 @@ def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
 
 
+def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
+    """
+    Fetches individual visit dates for all identified users.
+
+    Matomo method: Live.getLastVisitsDetails (no segment filter — visit-level)
+    Uses serverDate to bucket each visit to the day it started. Visits without
+    a userId or without serverDate are skipped.
+    org_id is accepted for caller/cache compatibility but not used as a segment.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+
+    Returns:
+        DataFrame with columns: user_id (str), visit_date (str "YYYY-MM-DD")
+    """
+    columns = ["user_id", "visit_date"]
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    records = []
+    for visit in data:
+        user_id = visit.get("userId")
+        if not user_id:
+            continue
+        visit_date = visit.get("serverDate", "")
+        if not visit_date:
+            continue
+        records.append({"user_id": str(user_id), "visit_date": str(visit_date)})
+
+    return pd.DataFrame(records, columns=columns)
+
+
 def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFrame:
     """
     Counts completed activities per user in delivered sessions only.

@@ -15,6 +15,7 @@ Live app: https://ayla-usage-dashboard.streamlit.app
 - Sessions delivered in the selected reporting period
 - Overall average star ratings (group and therapist)
 - Logins by organisation bar chart
+- Daily visit activity line chart (visits and unique users per day)
 - Monthly average star rating trend (group vs therapist)
 
 ### By Organisation

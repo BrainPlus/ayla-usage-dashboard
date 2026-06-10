@@ -1,6 +1,8 @@
 # Pandas joins and aggregations: merges Matomo analytics with PostgreSQL user/org data.
 # No database or Matomo calls here — all inputs are DataFrames.
 
+from datetime import date
+
 import pandas as pd
 
 _NO_USAGE = "No tracked usage"
@@ -549,6 +551,50 @@ def activity_catalogue_match_stats(
         "matched_ids": len(matched_ids),
         "unmatched_ids": len(usage_ids - catalogue_ids),
     }
+
+
+def build_daily_visit_activity(
+    visits: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    """
+    Aggregates per-visit rows into daily counts, zero-filling missing dates.
+
+    Args:
+        visits:     DataFrame with columns: user_id (str), visit_date (str "YYYY-MM-DD")
+        start_date: inclusive start of the reporting period
+        end_date:   inclusive end of the reporting period
+
+    Returns:
+        DataFrame with columns: date (str), visits (int), unique_users (int)
+        One row per calendar day in the reporting period.
+    """
+    all_dates = (
+        pd.date_range(start=start_date, end=end_date, freq="D")
+        .strftime("%Y-%m-%d")
+        .tolist()
+    )
+    skeleton = pd.DataFrame({"date": all_dates})
+
+    if visits.empty:
+        skeleton["visits"] = 0
+        skeleton["unique_users"] = 0
+        return skeleton
+
+    df = visits.copy()
+    df["visit_date"] = df["visit_date"].astype(str)
+    agg = (
+        df.groupby("visit_date")
+        .agg(visits=("user_id", "count"), unique_users=("user_id", "nunique"))
+        .reset_index()
+        .rename(columns={"visit_date": "date"})
+    )
+
+    result = skeleton.merge(agg, on="date", how="left")
+    result["visits"] = result["visits"].fillna(0).astype(int)
+    result["unique_users"] = result["unique_users"].fillna(0).astype(int)
+    return result
 
 
 def _normalise_activity_language(value: object) -> str:

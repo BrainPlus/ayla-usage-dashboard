@@ -106,6 +106,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "logins_by_organisation",
         "monthly_average_star_ratings",
         "activity_usage",
+        "daily_visit_activity",
         "by_organisation",
         "by_user",
     }
