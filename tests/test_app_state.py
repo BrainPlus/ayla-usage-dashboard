@@ -97,8 +97,8 @@ def test_dimension_options_include_unknown_and_sort_organisations(monkeypatch) -
         "Denmark",
         "Unknown",
     ]
-    grouped = app._sort_org_summary(organisations, "Country and sector")
-    assert grouped["organisation_name"].tolist() == ["Org A", "Org C", "Org B"]
+    sorted_orgs = app._sort_org_summary(organisations, "Country and sector")
+    assert sorted_orgs["organisation_name"].tolist() == ["Org A", "Org C", "Org B"]
 
 
 def test_database_user_ids_are_normalised_for_raw_aggregate_filters(monkeypatch) -> None:

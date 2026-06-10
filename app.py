@@ -173,14 +173,14 @@ def _dimension_options(organisations: pd.DataFrame, column: str) -> list[str]:
     return ["All"] + sorted(organisations[column].dropna().astype(str).unique().tolist())
 
 
-def _sort_org_summary(org_summary: pd.DataFrame, group_by: str) -> pd.DataFrame:
-    group_columns = {
+def _sort_org_summary(org_summary: pd.DataFrame, sort_by: str) -> pd.DataFrame:
+    sort_dimensions = {
         "Country": ["country"],
         "Sector": ["sector"],
         "Country and sector": ["country", "sector"],
-    }.get(group_by, [])
+    }.get(sort_by, [])
     sort_columns = [
-        column for column in group_columns + ["organisation_name"]
+        column for column in sort_dimensions + ["organisation_name"]
         if column in org_summary
     ]
     return org_summary.sort_values(sort_columns).reset_index(drop=True)
@@ -900,8 +900,8 @@ else:
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
-        group_by = st.selectbox(
-            "Group organisations by",
+        sort_by = st.selectbox(
+            "Sort organisations by",
             ["None", "Country", "Sector", "Country and sector"],
             key="organisation_group_by",
         )
@@ -919,7 +919,7 @@ else:
             )
             _render_bundle_filter_breakdown(bundle_filter_breakdown)
         st.dataframe(
-            _sort_org_summary(org_summary, group_by),
+            _sort_org_summary(org_summary, sort_by),
             column_config=_column_config_for(org_summary, {
                 "organisation_name": st.column_config.TextColumn(
                     help="Name of the care provider organisation",
