@@ -24,6 +24,7 @@ _REPORT_DATA_KEYS = (
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
+    "daily_visit_activity",
     "region",
     "date_range",
     "fetched_region",
@@ -97,6 +98,10 @@ _SECTION_HELP = {
         "use the selected date range. User, email, and organisation are current "
         "database details. Last login is the most recent recorded visit found within "
         "the last 365 days."
+    ),
+    "daily_visit_activity": (
+        "Daily number of Matomo visits and unique users during the selected reporting period. "
+        "A Matomo visit represents one continuous browser session."
     ),
 }
 
@@ -303,6 +308,11 @@ def _cached_visit_durations(date_range: str, region: str, org_id):
 
 
 @st.cache_data(ttl=3600)
+def _cached_visit_dates(date_range: str, region: str, org_id):
+    return matomo.get_visit_dates(date_range, org_id=org_id)
+
+
+@st.cache_data(ttl=3600)
 def _cached_organisations(region: str) -> pd.DataFrame:
     return database.get_organisations(region)
 
@@ -388,6 +398,7 @@ if pull:
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
+            visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
 
         if selected_org_id is not None:
             org_user_ids = set(db_users["user_id"].astype(str))
@@ -397,6 +408,7 @@ if pull:
                 activity_completions, org_user_ids
             )
             visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
+            visit_dates = _filter_to_org_users(visit_dates, org_user_ids)
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(
@@ -431,6 +443,9 @@ if pull:
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
             )
+            daily_visit_activity = merger.build_daily_visit_activity(
+                visit_dates, start_date, end_date
+            )
 
         st.session_state.update({
             "user_detail": user_detail,
@@ -440,6 +455,7 @@ if pull:
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
+            "daily_visit_activity": daily_visit_activity,
             "region": region,
             "date_range": date_range,
             "fetched_region": region,
@@ -495,6 +511,19 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
+
+        st.markdown(
+            "**Daily Visit Activity**",
+            help=_SECTION_HELP["daily_visit_activity"],
+        )
+        if "daily_visit_activity" in st.session_state:
+            _daily = st.session_state["daily_visit_activity"]
+            if not _daily.empty and _daily["visits"].sum() > 0:
+                _daily_chart = _daily.set_index("date")[["visits", "unique_users"]]
+                _daily_chart.columns = ["Visits", "Unique users"]
+                st.line_chart(_daily_chart)
+            else:
+                st.info("No visit activity recorded in the selected reporting period.")
 
         st.markdown(
             "**Monthly Average Star Ratings**",

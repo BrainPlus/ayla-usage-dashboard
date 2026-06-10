@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 import merger
@@ -733,3 +735,55 @@ def test_build_monthly_rating_summary_weights_ratings_by_response_count() -> Non
     assert result.to_dict("records") == [
         {"month": "2026-05", "target": "groups", "avg_rating": 4.6}
     ]
+
+
+# ── build_daily_visit_activity ────────────────────────────────────────────────
+
+def _visits(*rows: tuple) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["user_id", "visit_date"])
+
+
+def test_daily_visit_activity_zero_fills_all_dates_in_period() -> None:
+    result = merger.build_daily_visit_activity(
+        _visits(),
+        date(2026, 6, 1),
+        date(2026, 6, 5),
+    )
+    assert list(result["date"]) == [
+        "2026-06-01", "2026-06-02", "2026-06-03", "2026-06-04", "2026-06-05"
+    ]
+    assert list(result["visits"]) == [0, 0, 0, 0, 0]
+    assert list(result["unique_users"]) == [0, 0, 0, 0, 0]
+
+
+def test_daily_visit_activity_counts_visits_and_unique_users() -> None:
+    visits = _visits(
+        ("u1", "2026-06-01"),
+        ("u2", "2026-06-01"),
+        ("u1", "2026-06-03"),
+    )
+    result = merger.build_daily_visit_activity(visits, date(2026, 6, 1), date(2026, 6, 3))
+    assert result.to_dict("records") == [
+        {"date": "2026-06-01", "visits": 2, "unique_users": 2},
+        {"date": "2026-06-02", "visits": 0, "unique_users": 0},
+        {"date": "2026-06-03", "visits": 1, "unique_users": 1},
+    ]
+
+
+def test_daily_visit_activity_same_user_multiple_visits_one_day() -> None:
+    visits = _visits(
+        ("u1", "2026-06-01"),
+        ("u1", "2026-06-01"),
+        ("u1", "2026-06-01"),
+    )
+    result = merger.build_daily_visit_activity(visits, date(2026, 6, 1), date(2026, 6, 1))
+    assert result.iloc[0]["visits"] == 3
+    assert result.iloc[0]["unique_users"] == 1
+
+
+def test_daily_visit_activity_single_date_period() -> None:
+    visits = _visits(("u1", "2026-06-01"))
+    result = merger.build_daily_visit_activity(visits, date(2026, 6, 1), date(2026, 6, 1))
+    assert len(result) == 1
+    assert result.iloc[0]["visits"] == 1
+    assert result.iloc[0]["unique_users"] == 1

@@ -30,6 +30,10 @@ _Avoid_: Live mode
 A user with 2 or more Matomo visits in the selected reporting period. The threshold of 2 is fixed regardless of period length and serves as a minimum-engagement signal.
 _Avoid_: Engaged user, retained user
 
+**Daily Visit Activity**:
+A chart in the Global Overview tab showing the count of Matomo visits and unique users for each calendar day in the selected reporting period. Uses `serverDate` (visit start date) for bucketing; visits without a `serverDate` are excluded. Days with no visits are shown with zero counts.
+_Avoid_: Daily Login Activity (a Matomo visit does not prove an authentication event occurred)
+
 **Reporting Period**:
 The user-selected date range (From / To) applied to all period-based metrics — logins, sessions delivered, visit durations, activity completions, and star ratings. Lifetime metrics (total registered users, total bundles created) are not period-scoped. Default is the previous 90 days.
 _Avoid_: Date range, 30-day window, 90-day window

@@ -18,6 +18,7 @@ import matomo
         "get_sessions_delivered",
         "get_activity_completions_per_user",
         "get_activity_usage_by_id",
+        "get_visit_dates",
     ],
 )
 @pytest.mark.parametrize("org_id", [196, None, "unassigned"])
@@ -253,6 +254,62 @@ def test_fetch_non_list_first_page_raises(monkeypatch) -> None:
     monkeypatch.setattr(matomo, "matomo_get", lambda p: {"error": "no data"})
     with pytest.raises(RuntimeError, match="non-list response"):
         matomo._fetch_all_live_visits({"method": "Live.getLastVisitsDetails"})
+
+
+# ── get_visit_dates ───────────────────────────────────────────────────────────
+
+def test_get_visit_dates_returns_user_id_and_visit_date(monkeypatch) -> None:
+    monkeypatch.setattr(
+        matomo,
+        "matomo_get",
+        lambda params: [
+            {"userId": "u1", "serverDate": "2026-06-01"},
+            {"userId": "u2", "serverDate": "2026-06-02"},
+        ],
+    )
+    result = matomo.get_visit_dates("2026-06-01,2026-06-02")
+    assert list(result.columns) == ["user_id", "visit_date"]
+    assert result.to_dict("records") == [
+        {"user_id": "u1", "visit_date": "2026-06-01"},
+        {"user_id": "u2", "visit_date": "2026-06-02"},
+    ]
+
+
+def test_get_visit_dates_skips_visits_without_user_id(monkeypatch) -> None:
+    monkeypatch.setattr(
+        matomo,
+        "matomo_get",
+        lambda params: [
+            {"serverDate": "2026-06-01"},           # no userId
+            {"userId": "", "serverDate": "2026-06-01"},  # empty userId
+            {"userId": "u1", "serverDate": "2026-06-01"},
+        ],
+    )
+    result = matomo.get_visit_dates("2026-06-01,2026-06-01")
+    assert len(result) == 1
+    assert result.iloc[0]["user_id"] == "u1"
+
+
+def test_get_visit_dates_skips_visits_without_server_date(monkeypatch) -> None:
+    monkeypatch.setattr(
+        matomo,
+        "matomo_get",
+        lambda params: [
+            {"userId": "u1"},                        # no serverDate key
+            {"userId": "u2", "serverDate": ""},      # empty serverDate
+            {"userId": "u3", "serverDate": "2026-06-01"},
+        ],
+    )
+    result = matomo.get_visit_dates("2026-06-01,2026-06-01")
+    assert len(result) == 1
+    assert result.iloc[0]["user_id"] == "u3"
+
+
+def test_get_visit_dates_empty_response_returns_empty_frame(monkeypatch) -> None:
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: [])
+    result = matomo.get_visit_dates("2026-06-01,2026-06-01")
+    assert result.empty
+    assert list(result.columns) == ["user_id", "visit_date"]
 
 
 def test_fetch_non_list_later_page_raises(monkeypatch) -> None:
