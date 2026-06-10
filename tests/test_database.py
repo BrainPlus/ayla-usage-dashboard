@@ -127,3 +127,22 @@ def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
 
     assert "GROUP BY organisation_name" in captured["sql"]
     assert "ORDER BY organisation_name" in captured["sql"]
+
+
+def test_monthly_ratings_join_answers_to_readable_question_labels(monkeypatch) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_monthly_star_ratings(
+        "eu", date(2026, 1, 1), date(2026, 6, 8)
+    )
+
+    assert "question->>'question_en'                         AS question_label" in captured["sql"]
+    assert "question->>'id' = ans->>'questionId'" in captured["sql"]
+    assert "question_label" in captured["sql"]

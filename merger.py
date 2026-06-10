@@ -407,6 +407,39 @@ def build_monthly_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
     return summary[columns]
 
 
+def build_monthly_question_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
+    """Build response-weighted monthly ratings for each feedback question."""
+    columns = ["month", "target", "question_label", "avg_rating"]
+    if monthly_ratings.empty or "question_label" not in monthly_ratings.columns:
+        return pd.DataFrame(columns=columns)
+
+    ratings = monthly_ratings.copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["question_label"].notna()
+        & ratings["avg_rating"].notna()
+        & (ratings["total_responses"] > 0)
+    ].copy()
+    if ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings["rating_total"] = ratings["avg_rating"] * ratings["total_responses"]
+    summary = (
+        ratings.groupby(["month", "target", "question_label"], as_index=False)
+        .agg(
+            rating_total=("rating_total", "sum"),
+            total_responses=("total_responses", "sum"),
+        )
+    )
+    summary["avg_rating"] = (
+        summary["rating_total"] / summary["total_responses"]
+    ).round(2)
+    return summary[columns]
+
+
 def _weighted_rating_average(star_ratings: pd.DataFrame, target: str) -> float:
     if star_ratings.empty:
         return 0.0

@@ -12,9 +12,18 @@ import matomo
 import merger
 import exporter
 
-APP_REVISION = "2026-06-08-global-summary-compat-v2"
+APP_REVISION = "2026-06-10-question-feedback-trends"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
+
+_OUTCOME_PROXY_QUESTION = "How do you feel after today's session?"
+_OUTCOME_PROXY_CHART_LABEL = (
+    f"{_OUTCOME_PROXY_QUESTION} (not a clinical outcome)"
+)
+_QUESTION_CHART_COLORS = {
+    "groups": ["#1f77b4", "#2ca02c", "#17becf"],
+    "therapists": ["#9467bd", "#17becf", "#8c564b", "#7f7f7f"],
+}
 
 _REPORT_DATA_KEYS = (
     "user_detail",
@@ -82,6 +91,14 @@ _SECTION_HELP = {
         "Response-weighted average group and therapist ratings submitted during the "
         "selected date range, grouped by calendar month."
     ),
+    "group_feedback_by_question": (
+        "Monthly response-weighted ratings for each question answered by groups. "
+        "The highlighted post-session feeling question is a feedback proxy, not a "
+        "clinical outcome."
+    ),
+    "therapist_feedback_by_question": (
+        "Monthly response-weighted ratings for each question answered by therapists."
+    ),
     "activity_usage": (
         "Activity Complete events recorded during the selected date range and "
         "organisation scope. Only activities completed in deliver mode are counted. "
@@ -130,10 +147,42 @@ def _show_user_organisation_filter(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
+def _monthly_question_chart(monthly_ratings: pd.DataFrame, target: str):
+    summary = _build_monthly_question_rating_summary(monthly_ratings)
+    target_ratings = summary[summary["target"] == target]
+    if target_ratings.empty:
+        return pd.DataFrame(), []
+
+    chart = target_ratings.pivot(
+        index="month", columns="question_label", values="avg_rating"
+    )
+    chart.columns.name = None
+    if _OUTCOME_PROXY_QUESTION in chart.columns:
+        chart = chart.rename(
+            columns={_OUTCOME_PROXY_QUESTION: _OUTCOME_PROXY_CHART_LABEL}
+        )
+
+    default_colors = _QUESTION_CHART_COLORS[target]
+    colors = [
+        "#ff7f0e"
+        if question == _OUTCOME_PROXY_CHART_LABEL
+        else default_colors[index % len(default_colors)]
+        for index, question in enumerate(chart.columns)
+    ]
+    return chart, colors
+
+
 # ── deploy-compatibility helpers ──────────────────────────────────────────────
 # These wrappers guard against Streamlit's module-caching during hot deploys.
 # Stale cached module objects may lack new functions or accept fewer arguments.
 # Commits 18d5df5, c814074, 44be948 document when each guard was needed.
+
+def _build_monthly_question_rating_summary(monthly_ratings):
+    global merger
+    if not hasattr(merger, "build_monthly_question_rating_summary"):
+        merger = importlib.reload(merger)
+    return merger.build_monthly_question_rating_summary(monthly_ratings)
+
 
 def _get_activity_usage_by_id(
     date_range: str,
@@ -549,6 +598,34 @@ else:
             st.line_chart(monthly_pivot)
         else:
             st.info("No monthly rating data available.")
+
+        st.markdown(
+            "**Group Feedback by Question**",
+            help=_SECTION_HELP["group_feedback_by_question"],
+        )
+        group_question_chart, group_question_colors = _monthly_question_chart(
+            monthly_ratings, "groups"
+        )
+        if not group_question_chart.empty:
+            st.caption(
+                "The highlighted post-session feeling question is the closest "
+                "feedback proxy to an outcome measure, but it is not a clinical outcome."
+            )
+            st.line_chart(group_question_chart, color=group_question_colors)
+        else:
+            st.info("No group question rating data available.")
+
+        st.markdown(
+            "**Therapist Feedback by Question**",
+            help=_SECTION_HELP["therapist_feedback_by_question"],
+        )
+        therapist_question_chart, therapist_question_colors = _monthly_question_chart(
+            monthly_ratings, "therapists"
+        )
+        if not therapist_question_chart.empty:
+            st.line_chart(therapist_question_chart, color=therapist_question_colors)
+        else:
+            st.info("No therapist question rating data available.")
 
         st.divider()
         st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])

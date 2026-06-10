@@ -116,6 +116,8 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "overview",
         "logins_by_organisation",
         "monthly_average_star_ratings",
+        "group_feedback_by_question",
+        "therapist_feedback_by_question",
         "activity_usage",
         "daily_visit_activity",
         "by_organisation",
@@ -145,3 +147,59 @@ def test_deployment_revision_is_not_shown_in_sidebar(monkeypatch) -> None:
     app = _import_app(monkeypatch)
 
     assert not any("Deployment revision:" in caption for caption in app.st._captions)
+
+
+def test_monthly_question_chart_separates_target_and_labels_outcome_proxy(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    monthly_ratings = pd.DataFrame(
+        [
+            {
+                "month": "2026-05",
+                "target": "groups",
+                "question_label": "How much did you enjoy the session?",
+                "avg_rating": 4.0,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "target": "groups",
+                "question_label": "How do you feel after today's session?",
+                "avg_rating": 4.5,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "target": "therapists",
+                "question_label": "How much did the group enjoy the session?",
+                "avg_rating": 3.0,
+                "total_responses": 1,
+            },
+        ]
+    )
+
+    chart, colors = app._monthly_question_chart(monthly_ratings, "groups")
+
+    assert list(chart.columns) == [
+        "How do you feel after today's session? (not a clinical outcome)",
+        "How much did you enjoy the session?",
+    ]
+    assert "How much did the group enjoy the session?" not in chart.columns
+    assert colors[0] == "#ff7f0e"
+
+
+def test_monthly_question_summary_reloads_stale_merger_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_merger = ModuleType("merger")
+    fresh_merger = ModuleType("merger")
+    expected = pd.DataFrame([{"month": "2026-05"}])
+    fresh_merger.build_monthly_question_rating_summary = lambda ratings: expected
+
+    monkeypatch.setattr(app, "merger", stale_merger)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
+
+    result = app._build_monthly_question_rating_summary(pd.DataFrame())
+
+    assert result is expected
+    assert app.merger is fresh_merger

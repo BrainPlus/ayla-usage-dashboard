@@ -185,13 +185,15 @@ def get_monthly_star_ratings(
     org_id=None,
 ) -> pd.DataFrame:
     """
-    Calculates average star rating per month, organisation, and feedback target.
+    Calculates average star rating per month, organisation, feedback target,
+    and question label.
 
-    Same join as get_star_ratings_by_org, additionally grouped by calendar month.
+    Answers are joined to the English question label by question ID so labels
+    remain correct if question order changes.
 
     Returns columns:
         month (str "YYYY-MM"), organisation_name (str), target (str),
-        avg_rating (float), total_responses (int)
+        question_label (str), avg_rating (float), total_responses (int)
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
@@ -206,6 +208,7 @@ def get_monthly_star_ratings(
             TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
+            question->>'question_en'                         AS question_label,
             AVG((ans->>'answer')::numeric)                   AS avg_rating,
             COUNT(*)                                         AS total_responses
         FROM feedback_answers fa
@@ -213,10 +216,14 @@ def get_monthly_star_ratings(
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        JOIN LATERAL jsonb_array_elements(fq.questions->'questions') AS question
+            ON question->>'id' = ans->>'questionId'
         WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         {filter_sql}
-        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'), fq.target
-        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation')
+        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target, question_label
+        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target, question_label
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn, params=params)

@@ -737,6 +737,63 @@ def test_build_monthly_rating_summary_weights_ratings_by_response_count() -> Non
     ]
 
 
+def test_build_monthly_question_rating_summary_keeps_questions_separate() -> None:
+    monthly_ratings = pd.DataFrame(
+        [
+            {
+                "month": "2026-05",
+                "organisation_name": "Org A",
+                "target": "groups",
+                "question_label": "Session enjoyment",
+                "avg_rating": 1.0,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "organisation_name": "Org B",
+                "target": "groups",
+                "question_label": "Session enjoyment",
+                "avg_rating": 5.0,
+                "total_responses": 9,
+            },
+            {
+                "month": "2026-05",
+                "organisation_name": "Org A",
+                "target": "groups",
+                "question_label": "Activity engagement",
+                "avg_rating": 3.0,
+                "total_responses": 2,
+            },
+        ]
+    )
+
+    result = merger.build_monthly_question_rating_summary(monthly_ratings)
+
+    assert result.to_dict("records") == [
+        {
+            "month": "2026-05",
+            "target": "groups",
+            "question_label": "Activity engagement",
+            "avg_rating": 3.0,
+        },
+        {
+            "month": "2026-05",
+            "target": "groups",
+            "question_label": "Session enjoyment",
+            "avg_rating": 4.6,
+        },
+    ]
+
+
+def test_build_monthly_question_rating_summary_requires_question_labels() -> None:
+    result = merger.build_monthly_question_rating_summary(
+        _empty(["month", "target", "avg_rating", "total_responses"])
+    )
+
+    assert list(result.columns) == ["month", "target", "question_label", "avg_rating"]
+    assert result.empty
+
+
 # ── build_daily_visit_activity ────────────────────────────────────────────────
 
 def _visits(*rows: tuple) -> pd.DataFrame:
