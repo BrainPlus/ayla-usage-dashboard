@@ -407,6 +407,33 @@ def build_monthly_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
     return summary[columns]
 
 
+def build_monthly_bundle_creation_summary(
+    monthly_bundle_creations: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    """Aggregate bundle creations across the selected scope and zero-fill months."""
+    columns = ["month", "bundles_created"]
+    months = pd.period_range(start=start_date, end=end_date, freq="M").astype(str)
+    summary = pd.DataFrame({"month": months})
+
+    if monthly_bundle_creations.empty:
+        summary["bundles_created"] = 0
+        return summary[columns]
+
+    creations = monthly_bundle_creations.copy()
+    creations["bundles_created"] = pd.to_numeric(
+        creations["bundles_created"], errors="coerce"
+    ).fillna(0)
+    totals = (
+        creations.groupby("month", as_index=False)["bundles_created"]
+        .sum()
+    )
+    summary = summary.merge(totals, on="month", how="left")
+    summary["bundles_created"] = summary["bundles_created"].fillna(0).astype(int)
+    return summary[columns]
+
+
 def build_monthly_question_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
     """Build response-weighted monthly ratings for each feedback question."""
     columns = ["month", "target", "question_label", "avg_rating"]

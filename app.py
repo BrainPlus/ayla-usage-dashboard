@@ -12,7 +12,7 @@ import matomo
 import merger
 import exporter
 
-APP_REVISION = "2026-06-10-question-feedback-trends"
+APP_REVISION = "2026-06-10-bundle-creation-rate"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
@@ -30,6 +30,7 @@ _REPORT_DATA_KEYS = (
     "org_summary",
     "global_summary",
     "monthly_ratings",
+    "monthly_bundle_creations",
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
@@ -91,6 +92,10 @@ _SECTION_HELP = {
         "Response-weighted average group and therapist ratings submitted during the "
         "selected date range, grouped by calendar month."
     ),
+    "monthly_bundle_creations": (
+        "Bundles created during the selected reporting period, grouped by calendar "
+        "month. Uses the database bundle creation timestamp."
+    ),
     "group_feedback_by_question": (
         "Monthly response-weighted ratings for each question answered by groups. "
         "The highlighted post-session feeling question is a feedback proxy, not a "
@@ -147,6 +152,27 @@ def _show_user_organisation_filter(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
+def _show_global_bundle_creation_chart(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
+def _show_organisation_bundle_creation_chart(fetched_org_id) -> bool:
+    return fetched_org_id is not None
+
+
+def _monthly_bundle_creation_chart(
+    monthly_bundle_creations: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    summary = _build_monthly_bundle_creation_summary(
+        monthly_bundle_creations, start_date, end_date
+    )
+    return summary.set_index("month").rename(
+        columns={"bundles_created": "Bundles created"}
+    )
+
+
 def _monthly_question_chart(monthly_ratings: pd.DataFrame, target: str):
     summary = _build_monthly_question_rating_summary(monthly_ratings)
     target_ratings = summary[summary["target"] == target]
@@ -176,6 +202,28 @@ def _monthly_question_chart(monthly_ratings: pd.DataFrame, target: str):
 # These wrappers guard against Streamlit's module-caching during hot deploys.
 # Stale cached module objects may lack new functions or accept fewer arguments.
 # Commits 18d5df5, c814074, 44be948 document when each guard was needed.
+
+def _build_monthly_bundle_creation_summary(
+    monthly_bundle_creations,
+    start_date,
+    end_date,
+):
+    global merger
+    if not hasattr(merger, "build_monthly_bundle_creation_summary"):
+        merger = importlib.reload(merger)
+    return merger.build_monthly_bundle_creation_summary(
+        monthly_bundle_creations, start_date, end_date
+    )
+
+
+def _get_monthly_bundle_creations(region, start_date, end_date, org_id):
+    global database
+    if not hasattr(database, "get_monthly_bundle_creations"):
+        database = importlib.reload(database)
+    return database.get_monthly_bundle_creations(
+        region, start_date, end_date, org_id=org_id
+    )
+
 
 def _build_monthly_question_rating_summary(monthly_ratings):
     global merger
@@ -429,6 +477,9 @@ if pull:
             db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
             org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
             bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
+            monthly_bundle_creations = _get_monthly_bundle_creations(
+                region, start_date, end_date, org_id=selected_org_id
+            )
             star_ratings = database.get_star_ratings_by_org(
                 region, start_date, end_date, org_id=selected_org_id
             )
@@ -508,6 +559,7 @@ if pull:
             "org_summary": org_summary,
             "global_summary": global_summary,
             "monthly_ratings": monthly_ratings,
+            "monthly_bundle_creations": monthly_bundle_creations,
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
@@ -539,6 +591,14 @@ else:
     org_summary = st.session_state["org_summary"]
     user_detail = st.session_state["user_detail"]
     monthly_ratings = st.session_state["monthly_ratings"]
+    monthly_bundle_creations = st.session_state.get(
+        "monthly_bundle_creations",
+        pd.DataFrame(columns=["month", "organisation_name", "bundles_created"]),
+    )
+    fetched_start_date, fetched_end_date = (
+        date.fromisoformat(value)
+        for value in st.session_state["fetched_date_range"].split(",")
+    )
 
     # ── Tab 1: Global Overview ────────────────────────────────────────────────
     with tab1:
@@ -567,6 +627,17 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
+
+        if _show_global_bundle_creation_chart(fetched_org_id):
+            st.markdown(
+                "**Monthly Bundle Creations**",
+                help=_SECTION_HELP["monthly_bundle_creations"],
+            )
+            st.bar_chart(
+                _monthly_bundle_creation_chart(
+                    monthly_bundle_creations, fetched_start_date, fetched_end_date
+                )
+            )
 
         st.markdown(
             "**Daily Visit Activity**",
@@ -692,6 +763,18 @@ else:
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
+        if _show_organisation_bundle_creation_chart(
+            st.session_state.get("fetched_org_id")
+        ):
+            st.markdown(
+                "**Monthly Bundle Creations**",
+                help=_SECTION_HELP["monthly_bundle_creations"],
+            )
+            st.bar_chart(
+                _monthly_bundle_creation_chart(
+                    monthly_bundle_creations, fetched_start_date, fetched_end_date
+                )
+            )
         st.dataframe(
             org_summary,
             column_config=_column_config_for(org_summary, {

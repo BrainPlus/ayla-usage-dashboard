@@ -1,5 +1,6 @@
 import importlib
 import sys
+from datetime import date
 from types import ModuleType
 
 import pandas as pd
@@ -115,6 +116,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert set(app._SECTION_HELP) == {
         "overview",
         "logins_by_organisation",
+        "monthly_bundle_creations",
         "monthly_average_star_ratings",
         "group_feedback_by_question",
         "therapist_feedback_by_question",
@@ -141,6 +143,77 @@ def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) 
     assert app._show_user_organisation_filter(None)
     assert not app._show_user_organisation_filter(196)
     assert not app._show_user_organisation_filter("unassigned")
+
+
+def test_bundle_creation_charts_show_in_scope_specific_tabs(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_global_bundle_creation_chart(None)
+    assert not app._show_organisation_bundle_creation_chart(None)
+
+    for org_id in (196, "unassigned"):
+        assert not app._show_global_bundle_creation_chart(org_id)
+        assert app._show_organisation_bundle_creation_chart(org_id)
+
+
+def test_monthly_bundle_creation_chart_uses_display_label_and_zero_fills(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    creations = pd.DataFrame(
+        [{"month": "2026-01", "organisation_name": "Org A", "bundles_created": 2}]
+    )
+
+    chart = app._monthly_bundle_creation_chart(
+        creations, date(2026, 1, 1), date(2026, 2, 28)
+    )
+
+    assert chart.to_dict("index") == {
+        "2026-01": {"Bundles created": 2},
+        "2026-02": {"Bundles created": 0},
+    }
+
+
+def test_monthly_bundle_creation_summary_reloads_stale_merger_module(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    stale_merger = ModuleType("merger")
+    fresh_merger = ModuleType("merger")
+    expected = pd.DataFrame([{"month": "2026-05", "bundles_created": 1}])
+    fresh_merger.build_monthly_bundle_creation_summary = (
+        lambda creations, start, end: expected
+    )
+
+    monkeypatch.setattr(app, "merger", stale_merger)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
+
+    result = app._build_monthly_bundle_creation_summary(
+        pd.DataFrame(), date(2026, 5, 1), date(2026, 5, 31)
+    )
+
+    assert result is expected
+    assert app.merger is fresh_merger
+
+
+def test_monthly_bundle_creations_reloads_stale_database_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_database = ModuleType("database")
+    fresh_database = ModuleType("database")
+    expected = pd.DataFrame([{"month": "2026-05", "bundles_created": 1}])
+    fresh_database.get_monthly_bundle_creations = (
+        lambda region, start, end, org_id=None: expected
+    )
+
+    monkeypatch.setattr(app, "database", stale_database)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_database)
+
+    result = app._get_monthly_bundle_creations(
+        "eu", date(2026, 5, 1), date(2026, 5, 31), 196
+    )
+
+    assert result is expected
+    assert app.database is fresh_database
 
 
 def test_deployment_revision_is_not_shown_in_sidebar(monkeypatch) -> None:

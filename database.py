@@ -133,6 +133,43 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+def get_monthly_bundle_creations(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts bundles created per calendar month and organisation.
+
+    Returns columns: month (str "YYYY-MM"), organisation_name (str),
+    bundles_created (int)
+
+    Uses bundles.created_at as the canonical creation timestamp.
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', b.created_at), 'YYYY-MM') AS month,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            COUNT(b.id) AS bundles_created
+        FROM bundles b
+        JOIN users u ON u.id = b.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        WHERE b.created_at >= :start AND b.created_at < :end_exclusive
+        {filter_sql}
+        GROUP BY month, organisation_name
+        ORDER BY month, organisation_name
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
 def get_star_ratings_by_org(
     region: str,
     start_date: date,

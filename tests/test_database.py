@@ -21,6 +21,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_monthly_bundle_creations",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -31,6 +32,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_monthly_bundle_creations",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -41,6 +43,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_monthly_bundle_creations",
             "get_star_ratings_by_org",
             "get_monthly_star_ratings",
         )
@@ -67,21 +70,34 @@ def test_database_queries_apply_organisation_filter(
     monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
     monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
 
-    if function_name in ("get_star_ratings_by_org", "get_monthly_star_ratings"):
+    if function_name in (
+        "get_monthly_bundle_creations",
+        "get_star_ratings_by_org",
+        "get_monthly_star_ratings",
+    ):
         getattr(database, function_name)(
             "eu", date(2026, 1, 1), date(2026, 6, 8), org_id=org_id
         )
     else:
         getattr(database, function_name)("eu", org_id=org_id)
 
-    if function_name in ("get_star_ratings_by_org", "get_monthly_star_ratings"):
+    if function_name in (
+        "get_monthly_bundle_creations",
+        "get_star_ratings_by_org",
+        "get_monthly_star_ratings",
+    ):
         assert captured["params"] == {
             "start": date(2026, 1, 1),
             "end_exclusive": date(2026, 6, 9),
             **(expected_params or {}),
         }
-        assert "fa.created_at >= :start" in captured["sql"]
-        assert "fa.created_at < :end_exclusive" in captured["sql"]
+        timestamp_alias = (
+            "b.created_at"
+            if function_name == "get_monthly_bundle_creations"
+            else "fa.created_at"
+        )
+        assert f"{timestamp_alias} >= :start" in captured["sql"]
+        assert f"{timestamp_alias} < :end_exclusive" in captured["sql"]
     else:
         assert captured["params"] == expected_params
     if expected_filter is None:
@@ -127,6 +143,25 @@ def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
 
     assert "GROUP BY organisation_name" in captured["sql"]
     assert "ORDER BY organisation_name" in captured["sql"]
+
+
+def test_monthly_bundle_creations_use_canonical_database_timestamp(monkeypatch) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_monthly_bundle_creations(
+        "eu", date(2026, 1, 1), date(2026, 6, 8)
+    )
+
+    assert "DATE_TRUNC('month', b.created_at)" in captured["sql"]
+    assert "COUNT(b.id) AS bundles_created" in captured["sql"]
+    assert "SELECT * FROM bundles" not in captured["sql"]
 
 
 def test_monthly_ratings_join_answers_to_readable_question_labels(monkeypatch) -> None:

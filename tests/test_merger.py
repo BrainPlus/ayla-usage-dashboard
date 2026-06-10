@@ -737,6 +737,39 @@ def test_build_monthly_rating_summary_weights_ratings_by_response_count() -> Non
     ]
 
 
+def test_monthly_bundle_creation_summary_aggregates_orgs_and_zero_fills() -> None:
+    monthly_creations = pd.DataFrame(
+        [
+            {"month": "2026-01", "organisation_name": "Org A", "bundles_created": 2},
+            {"month": "2026-01", "organisation_name": "Org B", "bundles_created": 3},
+            {"month": "2026-03", "organisation_name": "Org A", "bundles_created": 1},
+        ]
+    )
+
+    result = merger.build_monthly_bundle_creation_summary(
+        monthly_creations, date(2026, 1, 15), date(2026, 3, 2)
+    )
+
+    assert result.to_dict("records") == [
+        {"month": "2026-01", "bundles_created": 5},
+        {"month": "2026-02", "bundles_created": 0},
+        {"month": "2026-03", "bundles_created": 1},
+    ]
+
+
+def test_monthly_bundle_creation_summary_zero_fills_empty_period() -> None:
+    result = merger.build_monthly_bundle_creation_summary(
+        _empty(["month", "organisation_name", "bundles_created"]),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+    )
+
+    assert result.to_dict("records") == [
+        {"month": "2026-01", "bundles_created": 0},
+        {"month": "2026-02", "bundles_created": 0},
+    ]
+
+
 def test_build_monthly_question_rating_summary_keeps_questions_separate() -> None:
     monthly_ratings = pd.DataFrame(
         [
