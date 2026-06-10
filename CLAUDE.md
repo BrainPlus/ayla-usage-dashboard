@@ -37,10 +37,11 @@ Streamlit web app for the Ayla CST Assistant product team. Pulls analytics from 
   - dimension13: organisationId
 
 ## CRITICAL Data Quality Rule
-ALL Matomo queries for session/activity/step events MUST include this segment filter:
-  customDimension10==false
+ALL Matomo queries for session/activity/step events MUST filter actions where:
+  dimension10 == false
 This ensures we only count real delivered sessions, not therapists editing/preparing.
-This filter does NOT apply to login/visit-level queries.
+Do not use the `customDimension10==false` Matomo segment: it returns no results on
+this instance. This filter does NOT apply to login/visit-level queries.
 
 ## Database Schema (relevant tables)
 - users: id, email, organisation_id

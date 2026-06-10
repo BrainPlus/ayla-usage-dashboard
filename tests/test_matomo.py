@@ -353,6 +353,43 @@ def test_get_step_completion_depth_excludes_users_outside_selected_scope(
     assert list(result["user_id"]) == ["u2"]
 
 
+def test_get_step_completion_depth_skips_incomplete_activity_instances(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-1",
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Step",
+                    "eventAction": "Step Complete",
+                    "dimension10": "false",
+                    "dimension5": "s1",
+                    "dimension6": "a1",
+                    "dimension7": "step-uuid-1",
+                },
+            ],
+        }
+    ]
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", lambda params, page_size: visits)
+
+    result = matomo.get_step_completion_depth(
+        "2024-01-01,2024-01-31", frozenset({"u1"})
+    )
+
+    assert result.empty
+
+
 # ── _fetch_all_live_visits pagination ─────────────────────────────────────────
 
 def test_fetch_single_page_less_than_page_size(monkeypatch) -> None:

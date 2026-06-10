@@ -39,4 +39,6 @@ def test_completed_sessions_are_configured_for_organisation_and_user_tables() ->
     assert _column_config_constructor_names("completed_sessions") == [
         "NumberColumn",
         "NumberColumn",
+        "NumberColumn",
+        "NumberColumn",
     ]
