@@ -1,7 +1,8 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
-# Deliver-mode filtering checks dimension10 on fetched actions in Python.
-# Completed-session and step-depth events also use the required customDimension10
-# source segment.
+# Deliver-mode filtering checks dimension10 on fetched actions in Python — dimension10=="false"
+# is never used as a Matomo source segment because the Live API returns custom dimensions as
+# bare `dimensionN` keys, and the segment engine cannot match them on this instance (returns
+# 0 results). Python-level filtering via _extract_dimension is the authoritative filter.
 # Do not apply dimension13 as a source-side Matomo segment.
 
 import io
@@ -193,8 +194,7 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
     """
     Fetches completed session instances.
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false, with the same filter enforced per action.
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
     Counts Session Complete events where dimension10 == "false". Prepare-mode
     Session Complete events and non-completion deliver-mode actions are skipped.
     Repeated events for the same CST session within one Matomo visit are
@@ -216,7 +216,6 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
         }
     )
 
@@ -416,8 +415,7 @@ def get_step_completion_depth(
     """
     Fetches unique completed steps for delivered activity occurrences.
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false, with the same filter enforced per action.
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
     Counts Step Complete events where dimension10 == "false". Repeated events for
     the same step within one activity occurrence are deduplicated.
 
@@ -446,7 +444,6 @@ def get_step_completion_depth(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
         },
         page_size=10000,
     )
@@ -520,8 +517,7 @@ def get_talking_point_engagement(
     Counts Talking Point Expand Click and Step Forward Click events per activity
     in deliver-mode sessions only (dimension10 == false).
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false, enforced per action.
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
@@ -537,7 +533,6 @@ def get_talking_point_engagement(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
         },
         page_size=10000,
     )
@@ -604,8 +599,7 @@ def get_media_usage(
     Counts audio and video interaction events per user and activity in
     deliver-mode sessions only (dimension10 == false).
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false, enforced per action.
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
     eventCategory: Activity
 
     Audio events: Audio Button Click, Audio Play Click, Audio Pause Click
@@ -632,7 +626,6 @@ def get_media_usage(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
         },
         page_size=10000,
     )
@@ -693,8 +686,7 @@ def get_engagement_events(
     Counts additional-activity acceptance and activity-replacement events per user
     in deliver-mode sessions only (dimension10 == false).
 
-    Matomo method: Live.getLastVisitsDetails
-    Segment: customDimension10==false, enforced per action.
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
     eventCategory: Activity
 
     Additional activity: Additional activity
@@ -727,7 +719,6 @@ def get_engagement_events(
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
-            "segment": "customDimension10==false",
         },
         page_size=10000,
     )

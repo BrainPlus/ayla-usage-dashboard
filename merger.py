@@ -213,7 +213,9 @@ def build_org_summary(
 
     denom = agg["completed_sessions"].replace(0, pd.NA)
     agg["avg_activities_per_session"] = (
-        (agg["total_activities_completed"] / denom).fillna(0.0).round(1)
+        pd.to_numeric(agg["total_activities_completed"] / denom, errors="coerce")
+        .fillna(0.0)
+        .round(1)
     )
     agg = agg.drop(columns=["total_activities_completed"])
 
@@ -818,6 +820,53 @@ def build_talking_point_engagement_table(
             }
         )[columns]
         .sort_values("Step Forward Clicks", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def build_media_usage_by_activity(
+    media_usage: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Aggregate total audio and video interactions per activity in deliver mode.
+
+    Args:
+        media_usage:        user_id, activity_id, audio_clicks, video_clicks
+        activity_catalogue: dict mapping activity_id → title
+
+    Returns:
+        DataFrame with columns: Activity Name, Audio Interactions, Video Interactions
+        Sorted by total interactions descending.
+    """
+    columns = ["Activity Name", "Audio Interactions", "Video Interactions"]
+    if media_usage.empty or "activity_id" not in media_usage.columns:
+        return pd.DataFrame(columns=columns)
+
+    df = media_usage.copy()
+    agg = (
+        df.groupby("activity_id", dropna=False)
+        .agg(
+            audio_interactions=("audio_clicks", "sum"),
+            video_interactions=("video_clicks", "sum"),
+        )
+        .reset_index()
+    )
+    agg = agg[(agg["audio_interactions"] > 0) | (agg["video_interactions"] > 0)]
+    if agg.empty:
+        return pd.DataFrame(columns=columns)
+
+    agg["Activity Name"] = (
+        agg["activity_id"].astype(str).map(activity_catalogue).fillna(agg["activity_id"])
+    )
+    return (
+        agg.rename(columns={
+            "audio_interactions": "Audio Interactions",
+            "video_interactions": "Video Interactions",
+        })[columns]
+        .assign(_total=lambda d: d["Audio Interactions"] + d["Video Interactions"])
+        .sort_values("_total", ascending=False)
+        .drop(columns="_total")
         .reset_index(drop=True)
     )
 

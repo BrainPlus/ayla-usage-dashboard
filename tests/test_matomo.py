@@ -36,10 +36,7 @@ def test_live_visit_queries_apply_only_required_source_segments(
 
     getattr(matomo, function_name)("2026-01-01,2026-01-31", org_id=org_id)
 
-    if function_name in {"get_completed_sessions", "get_step_completion_depth"}:
-        assert captured["params"]["segment"] == "customDimension10==false"
-    else:
-        assert "segment" not in captured["params"]
+    assert "segment" not in captured["params"]
 
 
 def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(

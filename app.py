@@ -1029,6 +1029,39 @@ else:
                     hide_index=True,
                 )
 
+        st.markdown("**Media Interactions by Activity**")
+        _media_usage_tab1 = st.session_state.get("media_usage", pd.DataFrame())
+        if _media_usage_tab1.empty:
+            st.info("No audio or video interaction events recorded in the selected scope.")
+        else:
+            _media_by_activity = merger.build_media_usage_by_activity(
+                _media_usage_tab1, _activity_catalogue
+            )
+            if _media_by_activity.empty:
+                st.info("No audio or video interaction events recorded in the selected scope.")
+            else:
+                st.dataframe(
+                    _media_by_activity,
+                    use_container_width=True,
+                    column_config=_column_config_for(
+                        _media_by_activity,
+                        {
+                            "Activity Name": st.column_config.TextColumn("Activity Name"),
+                            "Audio Interactions": st.column_config.NumberColumn(
+                                "Audio Interactions",
+                                format="%d",
+                                help="Total Audio Button/Play/Pause clicks in deliver mode",
+                            ),
+                            "Video Interactions": st.column_config.NumberColumn(
+                                "Video Interactions",
+                                format="%d",
+                                help="Total Video Button/Play/Pause clicks in deliver mode",
+                            ),
+                        },
+                    ),
+                    hide_index=True,
+                )
+
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
