@@ -136,7 +136,7 @@ To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automati
 
 ## Important Notes
 
-**Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level. This excludes Prepare (edit) mode. Completed-session and step-depth queries also apply the required `customDimension10==false` Matomo segment before enforcing the action-level filter.
+**Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level via `_extract_dimension`. This excludes Prepare (edit) mode. The `customDimension10==false` Matomo segment is not used because the Live API returns custom dimensions as bare `dimensionN` keys that the segment engine cannot match on this instance.
 
 **Regional filtering for raw Matomo aggregates** — Matomo is shared by UK and EU. Any raw Matomo data that is aggregated without first being joined to database users must be restricted to user IDs from the selected region's database before aggregation.
 

@@ -476,6 +476,8 @@ def get_step_completion_depth(
             language = _extract_dimension(action, "2")
             bundle_id = _extract_dimension(action, "14")
             session_id = _extract_dimension(action, "5")
+            if not bundle_id or not session_id:
+                continue
             activity_instance_id = "|".join(
                 [visit_id, bundle_id, session_id, activity_id]
             )
