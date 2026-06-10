@@ -32,11 +32,12 @@ def _build_user_detail(
     visit_durations: pd.DataFrame,
     db_users: pd.DataFrame | None = None,
     logins: pd.DataFrame | None = None,
+    last_login: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     return merger.build_user_detail(
         db_users if db_users is not None else _base_users(),
         logins if logins is not None else _empty(["user_id", "visits"]),
-        _empty(["user_id", "last_login_date"]),
+        last_login if last_login is not None else _empty(["user_id", "last_login_date"]),
         visit_durations,
         _empty(["user_id", "activities_completed"]),
     )
@@ -154,6 +155,25 @@ def test_country_and_sector_flow_to_user_and_organisation_tables() -> None:
 
     assert org_summary.iloc[0]["country"] == "Unknown"
     assert org_summary.iloc[0]["sector"] == "Care home"
+
+
+def test_empty_last_login_uses_no_usage_fallback_for_user_and_org() -> None:
+    user_detail = _build_user_detail(
+        _visit_durations([]),
+        last_login=pd.DataFrame([{"user_id": "u1", "last_login_date": ""}]),
+    )
+
+    assert user_detail.iloc[0]["last_login_date"] == "No tracked usage"
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+
+    assert org_summary.iloc[0]["last_login_date"] == "No tracked usage"
 
 
 def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() -> None:

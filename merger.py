@@ -51,7 +51,7 @@ def build_user_detail(
     df = df.merge(activity_completions, on="user_id", how="left")
 
     df["logins"] = df["logins"].fillna(0).astype(int)
-    df["last_login_date"] = df["last_login_date"].fillna(_NO_USAGE)
+    df["last_login_date"] = df["last_login_date"].replace("", pd.NA).fillna(_NO_USAGE)
     df["avg_real_session_minutes"] = (
         pd.to_numeric(df["avg_real_session_minutes"], errors="coerce")
         .fillna(0.0)

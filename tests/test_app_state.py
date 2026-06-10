@@ -85,10 +85,8 @@ def test_filter_to_database_users_produces_distinct_regional_results(monkeypatch
 def test_last_login_user_ids(monkeypatch) -> None:
     app = _import_app(monkeypatch)
     db_users = pd.DataFrame([{"user_id": "u1"}, {"user_id": "u2"}])
-    logins = pd.DataFrame([{"user_id": "u2"}, {"user_id": "u3"}])
 
-    assert app._last_login_user_ids(db_users, logins, 196) == ["u1", "u2"]
-    assert app._last_login_user_ids(db_users, logins, None) == ["u1", "u2", "u3"]
+    assert app._last_login_user_ids(db_users) == ["u1", "u2"]
 
 
 def test_overview_metrics_depend_on_organisation_scope(monkeypatch) -> None:

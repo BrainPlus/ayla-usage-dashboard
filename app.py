@@ -417,14 +417,8 @@ def _filter_to_database_users(
 
 def _last_login_user_ids(
     db_users: pd.DataFrame,
-    logins: pd.DataFrame,
-    selected_org_id,
 ) -> list[str]:
-    if selected_org_id is not None:
-        return sorted(set(db_users["user_id"].astype(str)))
-    return sorted(
-        set(db_users["user_id"].astype(str)) | set(logins["user_id"].astype(str))
-    )
+    return sorted(set(db_users["user_id"].astype(str)))
 
 
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
@@ -582,24 +576,18 @@ if pull:
             visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
+        logins = _filter_to_database_users(logins, database_user_ids)
+        sessions = _filter_to_database_users(sessions, database_user_ids)
+        activity_completions = _filter_to_database_users(
+            activity_completions, database_user_ids
+        )
+        visit_durations = _filter_to_database_users(
+            visit_durations, database_user_ids
+        )
         visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
 
-        if selected_org_id is not None:
-            logins = _filter_to_database_users(logins, database_user_ids)
-            sessions = _filter_to_database_users(sessions, database_user_ids)
-            activity_completions = _filter_to_database_users(
-                activity_completions, database_user_ids
-            )
-            visit_durations = _filter_to_database_users(
-                visit_durations, database_user_ids
-            )
-
         # Step 3 — Last login per user (slowest — show progress)
-        all_user_ids = _last_login_user_ids(
-            db_users,
-            logins,
-            selected_org_id,
-        )
+        all_user_ids = _last_login_user_ids(db_users)
 
         with st.status("Fetching last login dates...", expanded=True) as status:
             progress_bar = st.progress(0)
