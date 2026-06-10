@@ -59,15 +59,26 @@ def test_should_clear_report(monkeypatch) -> None:
     assert app._should_clear_report({"global_summary": {}}, "eu", None, "range")
 
 
-def test_filter_to_org_users(monkeypatch) -> None:
+def test_database_user_ids_are_normalised_for_raw_aggregate_filters(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    db_users = pd.DataFrame([{"user_id": 1}, {"user_id": "u2"}])
+
+    assert app._database_user_ids(db_users) == frozenset({"1", "u2"})
+
+
+def test_filter_to_database_users_produces_distinct_regional_results(monkeypatch) -> None:
     app = _import_app(monkeypatch)
     df = pd.DataFrame([{"user_id": "u1"}, {"user_id": "u2"}])
 
-    result = app._filter_to_org_users(df, {"u2"})
+    eu_result = app._filter_to_database_users(df, frozenset({"u1"}))
+    uk_result = app._filter_to_database_users(df, frozenset({"u2"}))
 
-    assert result.to_dict("records") == [{"user_id": "u2"}]
+    assert eu_result.to_dict("records") == [{"user_id": "u1"}]
+    assert uk_result.to_dict("records") == [{"user_id": "u2"}]
     without_user_ids = pd.DataFrame([{"activity_id": "a1"}])
-    assert app._filter_to_org_users(without_user_ids, {"u2"}).equals(without_user_ids)
+    assert app._filter_to_database_users(
+        without_user_ids, frozenset({"u2"})
+    ).equals(without_user_ids)
 
 
 def test_last_login_user_ids(monkeypatch) -> None:

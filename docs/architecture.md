@@ -43,13 +43,23 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 1. **DB queries** (fast, ~1–2s) — `database.py` runs five SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, star ratings by org, monthly star ratings.
 
-2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` makes four `Live.getLastVisitsDetails` calls: logins, sessions delivered, visit durations, and activity completions for the selected reporting period. One additional `UserId.getUsers` call fetches the login list.
+2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` fetches shared-instance Matomo data for the selected reporting period. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
 
 3. **Last login per user** (slow, ~1–5 min) — one `Live.getLastVisitsDetails` call per user, sequentially. This is the bottleneck. A progress bar is shown. Not cached because caching would skip the progress callback.
 
 4. **Avg session duration** (fast, 1 API call, cached 1h) — a single `Live.getLastVisitsDetails` call; duration is extracted and averaged per user in pandas.
 
 5. **Merge** — `merger.py` left-joins all Matomo DataFrames onto the DB user list and aggregates up to org and global level.
+
+### Regional boundary for raw Matomo aggregates
+
+Matomo is shared by the UK and EU deployments, so a raw Matomo result is not region-scoped by default. Any chart or metric that aggregates raw Matomo data without first joining it to the selected region's database users must receive or apply the `database_user_ids` allowlist before aggregation.
+
+- `Activity Usage` passes the allowlist into `matomo.get_activity_usage_by_id`, because that function aggregates events internally.
+- `Daily Visit Activity` filters the raw `get_visit_dates` rows in `app.py` before `merger.build_daily_visit_activity` aggregates them.
+- Organisation and user summaries are already region-scoped by their joins to the selected database user list.
+
+New raw Matomo aggregate paths must follow the same pattern. The selected organisation, when present, is already reflected in the database user allowlist.
 
 ---
 

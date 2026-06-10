@@ -242,10 +242,18 @@ def _should_clear_report(
     )
 
 
-def _filter_to_org_users(df: pd.DataFrame, org_user_ids: set[str]) -> pd.DataFrame:
+def _database_user_ids(db_users: pd.DataFrame) -> frozenset[str]:
+    return frozenset(db_users["user_id"].astype(str))
+
+
+def _filter_to_database_users(
+    df: pd.DataFrame,
+    database_user_ids: frozenset[str],
+) -> pd.DataFrame:
+    """Apply the selected database scope before aggregating raw Matomo rows."""
     if "user_id" not in df.columns:
         return df
-    return df[df["user_id"].isin(org_user_ids)].reset_index(drop=True)
+    return df[df["user_id"].astype(str).isin(database_user_ids)].reset_index(drop=True)
 
 
 def _last_login_user_ids(
@@ -378,6 +386,7 @@ if pull:
             monthly_ratings = database.get_monthly_star_ratings(
                 region, start_date, end_date, org_id=selected_org_id
             )
+            database_user_ids = _database_user_ids(db_users)
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
@@ -387,28 +396,26 @@ if pull:
                 date_range, region, selected_org_id
             )
             activity_catalogue = _cached_activity_catalogue()
-            allowed_user_ids = (
-                frozenset(db_users["user_id"].astype(str))
-                if selected_org_id is not None
-                else None
-            )
             activity_usage = _cached_activity_usage(
-                date_range, region, selected_org_id, allowed_user_ids
+                date_range, region, selected_org_id, database_user_ids
             )
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
             visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
 
+        # Raw aggregates must be scoped to selected-region DB users before aggregation.
+        visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
+
         if selected_org_id is not None:
-            org_user_ids = set(db_users["user_id"].astype(str))
-            logins = _filter_to_org_users(logins, org_user_ids)
-            sessions = _filter_to_org_users(sessions, org_user_ids)
-            activity_completions = _filter_to_org_users(
-                activity_completions, org_user_ids
+            logins = _filter_to_database_users(logins, database_user_ids)
+            sessions = _filter_to_database_users(sessions, database_user_ids)
+            activity_completions = _filter_to_database_users(
+                activity_completions, database_user_ids
             )
-            visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
-            visit_dates = _filter_to_org_users(visit_dates, org_user_ids)
+            visit_durations = _filter_to_database_users(
+                visit_durations, database_user_ids
+            )
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(

@@ -138,6 +138,8 @@ To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automati
 
 **Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level. This excludes Prepare (edit) mode and ensures only real delivered sessions are counted. This filter is applied in Python after fetching raw visit data from the Live API, not as a Matomo segment, because the segment approach was found to return 0 results.
 
+**Regional filtering for raw Matomo aggregates** — Matomo is shared by UK and EU. Any raw Matomo data that is aggregated without first being joined to database users must be restricted to user IDs from the selected region's database before aggregation.
+
 **Bundles table** — Never query `SELECT * FROM bundles`. The table is large and the query is slow. Always use targeted queries selecting only the columns needed (`b.id`, `b.user_id`). The join path to organisations is `bundles.user_id → users.id → users.organisation_id → organisations.id`.
 
 **Last login pull** — Fetching last login dates makes one API call per user to `Live.getLastVisitsDetails`. For large user bases this takes a few minutes. A progress bar is shown in the UI during this step.
