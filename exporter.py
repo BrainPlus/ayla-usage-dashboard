@@ -39,12 +39,14 @@ def build_methodology_df(
             "Count of deliver visits lasting 20 minutes or less",
         ),
         (
-            "Sessions delivered",
-            "Unique (bundleId + sessionId) pairs from delivered sessions only (editMode=false)",
+            "Completed sessions",
+            "Deliver-mode Session Complete events, deduplicated by "
+            "(Matomo visitId + bundleId + sessionId). Repeat deliveries in separate "
+            "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
             "Avg activities per session",
-            "Total Activity Complete events divided by sessions delivered in the selected period. "
+            "Total Activity Complete events divided by completed sessions in the selected period. "
             "Note: fires on forward navigation — rapid click-through may inflate this count.",
         ),
         ("Last login date", "Most recent recorded Matomo visit date"),

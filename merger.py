@@ -16,6 +16,7 @@ def build_user_detail(
     last_login: pd.DataFrame,
     visit_durations: pd.DataFrame,
     activity_completions: pd.DataFrame,
+    completed_sessions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-user detail table by left-joining all Matomo metrics onto the
@@ -27,12 +28,14 @@ def build_user_detail(
         last_login:            user_id, last_login_date
         visit_durations:       user_id, visit_duration_seconds, has_deliver_action
         activity_completions:  user_id, activities_completed
+        completed_sessions:    visit_id, bundle_id, session_id, user_id
 
     Returns:
         DataFrame with columns:
             user_id, email, organisation_name, last_login_date,
             logins, avg_real_session_minutes,
-            median_prepare_minutes, short_visit_count, activities_completed
+            median_prepare_minutes, short_visit_count, completed_sessions,
+            activities_completed
     """
     df = db_users.copy()
     duration_metrics = _build_visit_duration_metrics(visit_durations)
@@ -44,6 +47,16 @@ def build_user_detail(
     df = df.merge(last_login, on="user_id", how="left")
     df = df.merge(duration_metrics, on="user_id", how="left")
     df = df.merge(activity_completions, on="user_id", how="left")
+    if completed_sessions is not None:
+        completed_by_user = (
+            _deduplicate_completed_sessions(completed_sessions)
+            .groupby("user_id")
+            .size()
+            .reset_index(name="completed_sessions")
+        )
+        df = df.merge(completed_by_user, on="user_id", how="left")
+    else:
+        df["completed_sessions"] = 0
 
     df["logins"] = df["logins"].fillna(0).astype(int)
     df["last_login_date"] = df["last_login_date"].replace("", pd.NA).fillna(_NO_USAGE)
@@ -58,6 +71,7 @@ def build_user_detail(
         .astype(float)
     )
     df["short_visit_count"] = df["short_visit_count"].fillna(0).astype(int)
+    df["completed_sessions"] = df["completed_sessions"].fillna(0).astype(int)
     df["activities_completed"] = df["activities_completed"].fillna(0).astype(int)
 
     df = df.sort_values(["organisation_name", "email"]).reset_index(drop=True)
@@ -71,13 +85,14 @@ def build_user_detail(
         "avg_real_session_minutes",
         "median_prepare_minutes",
         "short_visit_count",
+        "completed_sessions",
         "activities_completed",
     ]]
 
 
 def build_org_summary(
     user_detail: pd.DataFrame,
-    sessions_delivered: pd.DataFrame,
+    completed_sessions: pd.DataFrame,
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
     visit_durations: pd.DataFrame | None = None,
@@ -85,12 +100,11 @@ def build_org_summary(
     """
     Builds the per-organisation summary table.
 
-    Sessions delivered are counted as unique (bundle_id, session_id) pairs —
-    deduplicate before passing in if needed.
+    Completed sessions are deduplicated by (visit_id, bundle_id, session_id).
 
     Args:
         user_detail:            output of build_user_detail
-        sessions_delivered:     bundle_id, session_id, user_id
+        completed_sessions:     visit_id, bundle_id, session_id, user_id
         star_ratings:           organisation_name, target, avg_rating, total_responses
         org_user_counts:        organisation_name, user_count
         visit_durations:        user_id, visit_duration_seconds, has_deliver_action
@@ -101,7 +115,7 @@ def build_org_summary(
             organisation_name, total_users, active_users,
             logins, avg_real_session_minutes,
             median_prepare_minutes, min_real_session_minutes, max_real_session_minutes,
-            short_visit_count, sessions_delivered,
+            short_visit_count, completed_sessions,
             last_login_date, groups_avg_rating, therapists_avg_rating
     """
     # --- aggregate user_detail by org ---
@@ -130,24 +144,23 @@ def build_org_summary(
         on="organisation_name", how="left",
     )
 
-    # --- sessions delivered: unique (bundle_id, session_id) pairs per org ---
+    # --- completed sessions: unique (visit_id, bundle_id, session_id) per org ---
     def _session_counts(sessions_df: pd.DataFrame) -> pd.DataFrame:
         if sessions_df.empty:
             return pd.DataFrame(columns=["organisation_name", "sessions"])
         # Attach org name via user_detail
-        enriched = sessions_df.merge(
+        enriched = _deduplicate_completed_sessions(sessions_df).merge(
             user_detail[["user_id", "organisation_name"]].drop_duplicates(),
             on="user_id", how="left",
         )
         return (
-            enriched.drop_duplicates(subset=["organisation_name", "bundle_id", "session_id"])
-            .groupby("organisation_name")
+            enriched.groupby("organisation_name")
             .size()
             .reset_index(name="sessions")
         )
 
-    session_counts = _session_counts(sessions_delivered).rename(
-        columns={"sessions": "sessions_delivered"}
+    session_counts = _session_counts(completed_sessions).rename(
+        columns={"sessions": "completed_sessions"}
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
 
@@ -191,14 +204,14 @@ def build_org_summary(
         "total_users", "active_users",
         "logins",
         "short_visit_count",
-        "sessions_delivered",
+        "completed_sessions",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
 
-    denom = agg["sessions_delivered"].replace(0, pd.NA)
+    denom = agg["completed_sessions"].replace(0, pd.NA)
     agg["avg_activities_per_session"] = (
         (agg["total_activities_completed"] / denom).fillna(0.0).round(1)
     )
@@ -268,12 +281,22 @@ def build_org_summary(
         "min_real_session_minutes",
         "max_real_session_minutes",
         "short_visit_count",
-        "sessions_delivered",
+        "completed_sessions",
         "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
         "therapists_avg_rating",
     ]]
+
+
+def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
+    """Return one completed CST session per Matomo visit, bundle, and session."""
+    columns = ["visit_id", "bundle_id", "session_id", "user_id"]
+    if completed_sessions.empty:
+        return pd.DataFrame(columns=columns)
+    return completed_sessions.drop_duplicates(
+        subset=["visit_id", "bundle_id", "session_id"]
+    )
 
 
 def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame:
@@ -349,7 +372,7 @@ def build_global_summary(
             total_organisations (int)
             total_users (int)
             total_groups_created (int)
-            total_sessions_delivered (int)
+            total_completed_sessions (int)
             overall_groups_avg_rating (float)
             overall_therapists_avg_rating (float)
     """
@@ -375,7 +398,7 @@ def build_global_summary(
         "total_organisations": int(len(real_orgs)),
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
-        "total_sessions_delivered": int(org_summary["sessions_delivered"].sum()),
+        "total_completed_sessions": int(org_summary["completed_sessions"].sum()),
         "overall_groups_avg_rating": groups_average,
         "overall_therapists_avg_rating": therapists_average,
     }

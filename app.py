@@ -64,9 +64,10 @@ _OVERVIEW_METRICS = (
         "This is not limited by the selected date range.",
     ),
     (
-        "total_sessions_delivered",
-        "Sessions Delivered",
-        "Unique CST sessions delivered during the selected date range.",
+        "total_completed_sessions",
+        "Completed Sessions",
+        "Deliver-mode Session Complete events during the selected date range, "
+        "deduplicated by Matomo visit + bundle + session ID.",
     ),
     (
         "overall_groups_avg_rating",
@@ -116,15 +117,15 @@ _SECTION_HELP = {
     ),
     "by_organisation": (
         "Organisation-level details. Logins, active users, session-duration metrics, "
-        "sessions delivered, activity averages, and ratings use the selected date "
+        "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
         "most recent recorded visit found within the last 365 days."
     ),
     "by_user": (
-        "User-level details. Logins, session-duration metrics, and completed activities "
-        "use the selected date range. User, email, and organisation are current "
-        "database details. Last login is the most recent recorded visit found within "
-        "the last 365 days."
+        "User-level details. Logins, session-duration metrics, completed sessions, "
+        "and completed activities use the selected date range. User, email, and "
+        "organisation are current database details. Last login is the most recent "
+        "recorded visit found within the last 365 days."
     ),
     "daily_visit_activity": (
         "Daily number of Matomo visits and unique users during the selected reporting period. "
@@ -420,8 +421,8 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_sessions_delivered(date_range: str, region: str, org_id):
-    return matomo.get_sessions_delivered(date_range, org_id=org_id)
+def _cached_completed_sessions(date_range: str, region: str, org_id):
+    return matomo.get_completed_sessions(date_range, org_id=org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -552,7 +553,9 @@ if pull:
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
             logins = _cached_logins(date_range)
-            sessions = _cached_sessions_delivered(date_range, region, selected_org_id)
+            completed_sessions = _cached_completed_sessions(
+                date_range, region, selected_org_id
+            )
             activity_completions = _cached_activity_completions(
                 date_range, region, selected_org_id
             )
@@ -567,7 +570,9 @@ if pull:
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
         logins = _filter_to_database_users(logins, database_user_ids)
-        sessions = _filter_to_database_users(sessions, database_user_ids)
+        completed_sessions = _filter_to_database_users(
+            completed_sessions, database_user_ids
+        )
         activity_completions = _filter_to_database_users(
             activity_completions, database_user_ids
         )
@@ -597,9 +602,10 @@ if pull:
         with st.spinner("Building report..."):
             user_detail = merger.build_user_detail(
                 db_users, logins, last_login, visit_durations, activity_completions,
+                completed_sessions,
             )
             org_summary = merger.build_org_summary(
-                user_detail, sessions, star_ratings, org_user_counts,
+                user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
             )
             global_summary = _build_global_summary(
@@ -877,16 +883,16 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
-                "sessions_delivered": st.column_config.NumberColumn(
+                "completed_sessions": st.column_config.NumberColumn(
                     help=(
-                        "Unique CST therapy sessions delivered in the selected period — counted as "
-                        "unique (bundle + session ID) pairs with at least one deliver-mode action. "
-                        "Different unit from visit-based duration metrics."
+                        "Deliver-mode Session Complete events in the selected period, "
+                        "deduplicated by Matomo visit + bundle + session ID. Repeat "
+                        "deliveries in separate visits are counted separately."
                     ),
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(
-                        "Total Activity Complete events divided by sessions delivered in the "
+                        "Total Activity Complete events divided by completed sessions in the "
                         "selected period. Note: the Activity Complete event fires on "
                         "forward navigation, so rapid click-through may inflate this count."
                     ),
@@ -957,6 +963,12 @@ else:
                     help=(
                         "Count of deliver-mode visits 20 minutes or under — treated as check-ins "
                         "or browsing"
+                    ),
+                ),
+                "completed_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-mode Session Complete events in the selected period, "
+                        "deduplicated by Matomo visit + bundle + session ID."
                     ),
                 ),
                 "activities_completed": st.column_config.NumberColumn(

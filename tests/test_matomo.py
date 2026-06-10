@@ -15,14 +15,14 @@ import matomo
     "function_name",
     [
         "get_visit_durations",
-        "get_sessions_delivered",
+        "get_completed_sessions",
         "get_activity_completions_per_user",
         "get_activity_usage_by_id",
         "get_visit_dates",
     ],
 )
 @pytest.mark.parametrize("org_id", [196, None, "unassigned"])
-def test_live_visit_queries_never_apply_organisation_segment(
+def test_live_visit_queries_apply_only_required_source_segments(
     monkeypatch, function_name, org_id
 ) -> None:
     captured = {}
@@ -35,56 +35,97 @@ def test_live_visit_queries_never_apply_organisation_segment(
 
     getattr(matomo, function_name)("2026-01-01,2026-01-31", org_id=org_id)
 
-    assert "segment" not in captured["params"]
+    if function_name == "get_completed_sessions":
+        assert captured["params"]["segment"] == "customDimension10==false"
+    else:
+        assert "segment" not in captured["params"]
 
 
-def test_get_sessions_delivered_counts_all_deliver_visits_regardless_of_duration(monkeypatch) -> None:
+def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(
+    monkeypatch,
+) -> None:
     def fake_matomo_get(params: dict) -> list[dict]:
         return [
             {
+                "idVisit": "v1",
                 "userId": "u1",
                 "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS + 1,
                 "actionDetails": [
-                    {"dimension10": "false", "dimension14": "b1", "dimension5": "s1"},
-                    {"dimension10": "false", "dimension14": "b1", "dimension5": "s1"},
-                    {"dimension10": "true", "dimension14": "b2", "dimension5": "s2"},
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "true",
+                        "dimension14": "b2",
+                        "dimension5": "s2",
+                    },
+                    {
+                        "type": "event",
+                        "eventAction": "Session Start",
+                        "dimension10": "false",
+                        "dimension14": "b3",
+                        "dimension5": "s3",
+                    },
                 ],
             },
             {
-                "userId": "u2",
+                "idVisit": "v2",
+                "userId": "u1",
                 "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS,
                 "actionDetails": [
-                    {"dimension10": "false", "dimension14": "b3", "dimension5": "s3"},
-                ],
-            },
-            {
-                "userId": "u3",
-                "visitDuration": matomo.REAL_SESSION_MIN_DURATION_SECONDS + 1,
-                "actionDetails": [
-                    {"dimension10": "true", "dimension14": "b4", "dimension5": "s4"},
+                    {
+                        "type": "event",
+                        "eventAction": "Session Complete",
+                        "dimension10": "false",
+                        "dimension14": "b1",
+                        "dimension5": "s1",
+                    },
                 ],
             },
         ]
 
     monkeypatch.setattr(matomo, "matomo_get", fake_matomo_get)
 
-    result = matomo.get_sessions_delivered("2026-01-01,2026-01-31")
+    result = matomo.get_completed_sessions("2026-01-01,2026-01-31")
 
     expected = pd.DataFrame(
         [
-            {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
-            {"bundle_id": "b3", "session_id": "s3", "user_id": "u2"},
+            {
+                "visit_id": "v1",
+                "bundle_id": "b1",
+                "session_id": "s1",
+                "user_id": "u1",
+            },
+            {
+                "visit_id": "v2",
+                "bundle_id": "b1",
+                "session_id": "s1",
+                "user_id": "u1",
+            },
         ],
-        columns=["bundle_id", "session_id", "user_id"],
+        columns=["visit_id", "bundle_id", "session_id", "user_id"],
     )
     pd.testing.assert_frame_equal(result, expected)
 
 
-def test_get_sessions_delivered_raises_for_non_list_response(monkeypatch) -> None:
+def test_get_completed_sessions_raises_for_non_list_response(monkeypatch) -> None:
     import pytest
     monkeypatch.setattr(matomo, "matomo_get", lambda params: {"error": "bad response"})
     with pytest.raises(RuntimeError, match="non-list response"):
-        matomo.get_sessions_delivered("2026-01-01,2026-01-31")
+        matomo.get_completed_sessions("2026-01-01,2026-01-31")
 
 
 def test_get_activity_usage_by_id_counts_deliver_only(monkeypatch) -> None:

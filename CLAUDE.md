@@ -52,9 +52,9 @@ This filter does NOT apply to login/visit-level queries.
 
 ## App Structure
 Three tabs:
-1. Global Overview - totals across all orgs, sessions delivered, monthly star rating trend
-2. By Organisation - logins, active users, avg session time, sessions delivered, star ratings
-3. By User - logins, last login, avg session time, % activities completed
+1. Global Overview - totals across all orgs, completed sessions, monthly star rating trend
+2. By Organisation - logins, active users, avg session time, completed sessions, star ratings
+3. By User - logins, last login, avg session time, completed sessions, activities completed
 
 ## File Structure
 - app.py: Streamlit UI, tabs, sidebar

@@ -140,7 +140,7 @@ def test_empty_last_login_uses_no_usage_fallback_for_user_and_org() -> None:
 
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=_visit_durations([]),
@@ -158,7 +158,7 @@ def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() 
 
         org_summary = merger.build_org_summary(
             user_detail,
-            _empty(["bundle_id", "session_id", "user_id"]),
+            _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
             _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
             pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
             visit_durations=_visit_durations([]),
@@ -245,7 +245,7 @@ def test_org_summary_sums_short_visits_and_uses_median_of_user_medians() -> None
 
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -298,7 +298,7 @@ def test_org_summary_two_level_median() -> None:
 
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -322,7 +322,7 @@ def _base_org_setup_for_minmax(visit_rows):
 def _org_summary_with_vd(user_detail, vd, user_count=2):
     return merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": user_count}]),
         visit_durations=vd,
@@ -352,7 +352,7 @@ def test_org_min_max_single_session() -> None:
     user_detail = _build_user_detail(vd, db_users=db_users)
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=vd,
@@ -374,7 +374,7 @@ def test_org_min_max_excludes_short_visits() -> None:
     user_detail = _build_user_detail(vd, db_users=db_users)
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=vd,
@@ -422,7 +422,7 @@ def test_org_avg_falls_back_to_user_detail_when_visit_durations_absent() -> None
     # build_org_summary called with EMPTY visit_durations — must use user_detail fallback
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 2}]),
         visit_durations=_visit_durations([]),
@@ -445,7 +445,7 @@ def test_org_min_max_no_real_sessions() -> None:
     user_detail = _build_user_detail(vd, db_users=db_users)
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=vd,
@@ -457,7 +457,7 @@ def test_org_min_max_no_real_sessions() -> None:
 
 
 def test_avg_activities_per_session_basic() -> None:
-    """Sum activities_completed across users, divide by sessions_delivered."""
+    """Sum activities_completed across users, divide by completed_sessions."""
     db_users = pd.DataFrame([
         {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
         {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org A"},
@@ -474,9 +474,9 @@ def test_avg_activities_per_session_basic() -> None:
         activity_completions,
     )
     sessions_30 = pd.DataFrame([
-        {"bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
-        {"bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
-        {"bundle_id": "b1", "session_id": "s3", "user_id": "u2"},
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+        {"visit_id": "v3", "bundle_id": "b1", "session_id": "s3", "user_id": "u2"},
     ])
     org_summary = merger.build_org_summary(
         user_detail,
@@ -487,6 +487,41 @@ def test_avg_activities_per_session_basic() -> None:
     )
     row = org_summary.iloc[0]
     assert row["avg_activities_per_session"] == 5.0  # 15 / 3 = 5.0
+
+
+def test_completed_sessions_are_consistent_across_user_org_and_global_summaries() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+    org_summary = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+    global_summary = merger.build_global_summary(
+        org_summary,
+        _empty(["organisation_name", "total_groups"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+    )
+
+    assert user_detail.iloc[0]["completed_sessions"] == 2
+    assert org_summary.iloc[0]["completed_sessions"] == 2
+    assert global_summary["total_completed_sessions"] == 2
 
 
 def test_build_activity_usage_table_known_ids() -> None:
@@ -597,8 +632,8 @@ def test_activity_catalogue_match_stats_partial_match() -> None:
     }
 
 
-def test_avg_activities_per_session_zero_sessions_delivered() -> None:
-    """When sessions_delivered == 0, result must be 0.0 (not NaN or error)."""
+def test_avg_activities_per_session_zero_completed_sessions() -> None:
+    """When completed_sessions == 0, result must be 0.0 (not NaN or error)."""
     db_users = pd.DataFrame([
         {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
     ])
@@ -614,7 +649,7 @@ def test_avg_activities_per_session_zero_sessions_delivered() -> None:
     )
     org_summary = merger.build_org_summary(
         user_detail,
-        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
         _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
         pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
         visit_durations=_visit_durations([]),
@@ -630,12 +665,12 @@ def test_global_summary_weights_ratings_by_response_count() -> None:
             {
                 "organisation_name": "Org A",
                 "total_users": 1,
-                "sessions_delivered": 2,
+                "completed_sessions": 2,
             },
             {
                 "organisation_name": "Org B",
                 "total_users": 1,
-                "sessions_delivered": 4,
+                "completed_sessions": 4,
             },
         ]
     )
@@ -684,7 +719,7 @@ def test_global_summary_with_single_organisation_input() -> None:
             {
                 "organisation_name": "Org A",
                 "total_users": 3,
-                "sessions_delivered": 4,
+                "completed_sessions": 4,
             }
         ]
     )
@@ -698,7 +733,7 @@ def test_global_summary_with_single_organisation_input() -> None:
     assert result["total_organisations"] == 1
     assert result["total_users"] == 3
     assert result["total_groups_created"] == 2
-    assert result["total_sessions_delivered"] == 4
+    assert result["total_completed_sessions"] == 4
 
 
 def test_global_summary_falls_back_to_org_averages_without_star_ratings() -> None:
@@ -707,14 +742,14 @@ def test_global_summary_falls_back_to_org_averages_without_star_ratings() -> Non
             {
                 "organisation_name": "Org A",
                 "total_users": 1,
-                "sessions_delivered": 2,
+                "completed_sessions": 2,
                 "groups_avg_rating": 1.0,
                 "therapists_avg_rating": 0.0,
             },
             {
                 "organisation_name": "Org B",
                 "total_users": 1,
-                "sessions_delivered": 4,
+                "completed_sessions": 4,
                 "groups_avg_rating": 5.0,
                 "therapists_avg_rating": 4.0,
             },

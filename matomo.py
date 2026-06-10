@@ -1,6 +1,7 @@
 # All Matomo API calls: visits, session events, activity completions, custom dimension queries.
-# Deliver-mode filtering checks dimension10 on fetched actions in Python; do not
-# apply customDimension10 or dimension13 as source-side Matomo segments.
+# Deliver-mode filtering checks dimension10 on fetched actions in Python.
+# Completed-session events also use the required customDimension10 source segment.
+# Do not apply dimension13 as a source-side Matomo segment.
 
 import io
 from datetime import date, timedelta
@@ -187,15 +188,16 @@ def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
+def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
     """
-    Fetches delivered session instances as (bundleId, sessionId, userId) rows.
+    Fetches completed session instances.
 
-    Matomo method: Live.getLastVisitsDetails (no segment filter — filtered in Python)
-    All unique CST sessions with actions where dimension10 == "false" are
-    included; dimension10 == "true" (prepare/edit mode) actions are skipped.
-    Visit duration does not affect this count. The 20-minute threshold applies
-    only to visit-duration metrics.
+    Matomo method: Live.getLastVisitsDetails
+    Segment: customDimension10==false, with the same filter enforced per action.
+    Counts Session Complete events where dimension10 == "false". Prepare-mode
+    Session Complete events and non-completion deliver-mode actions are skipped.
+    Repeated events for the same CST session within one Matomo visit are
+    deduplicated, while completions in separate visits are counted separately.
 
     bundle_id comes from dimension14 (customBundleId — the DB integer bundle ID).
     session_id comes from dimension5.
@@ -204,34 +206,49 @@ def get_sessions_delivered(date_range: str, org_id=None) -> pd.DataFrame:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
 
     Returns:
-        DataFrame with columns: bundle_id (str), session_id (str), user_id (str)
-        Deduplicate on (bundle_id, session_id, user_id) before counting.
+        DataFrame with columns: visit_id, bundle_id, session_id, user_id
+        Deduplicated on (visit_id, bundle_id, session_id).
     """
+    columns = ["visit_id", "bundle_id", "session_id", "user_id"]
     data = _fetch_all_live_visits(
         {
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
+            "segment": "customDimension10==false",
         }
     )
 
     if not data:
-        return pd.DataFrame(columns=["bundle_id", "session_id", "user_id"])
+        return pd.DataFrame(columns=columns)
 
     records = []
-    for visit in data:
+    for visit_index, visit in enumerate(data):
+        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
         user_id = str(visit.get("userId", ""))
         seen = set()
         for action in visit.get("actionDetails", []):
-            if _extract_dimension(action, "10") != "false":
+            if (
+                _extract_dimension(action, "10") != "false"
+                or action.get("type") != "event"
+                or action.get("eventAction") != "Session Complete"
+            ):
                 continue
             b = _extract_dimension(action, "14")
             s = _extract_dimension(action, "5")
-            if b and s and (b, s) not in seen:
-                seen.add((b, s))
-                records.append({"bundle_id": b, "session_id": s, "user_id": user_id})
+            key = (visit_id, b, s)
+            if b and s and key not in seen:
+                seen.add(key)
+                records.append(
+                    {
+                        "visit_id": visit_id,
+                        "bundle_id": b,
+                        "session_id": s,
+                        "user_id": user_id,
+                    }
+                )
 
-    return pd.DataFrame(records, columns=["bundle_id", "session_id", "user_id"])
+    return pd.DataFrame(records, columns=columns)
 
 
 def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:

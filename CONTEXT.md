@@ -35,7 +35,7 @@ A chart in the Global Overview tab showing the count of Matomo visits and unique
 _Avoid_: Daily Login Activity (a Matomo visit does not prove an authentication event occurred)
 
 **Reporting Period**:
-The user-selected date range (From / To) applied to all period-based metrics — logins, sessions delivered, visit durations, activity completions, and star ratings. Lifetime metrics (total registered users, total bundles created) are not period-scoped. Default is the previous 90 days.
+The user-selected date range (From / To) applied to all period-based metrics — logins, completed sessions, visit durations, activity completions, and star ratings. Lifetime metrics (total registered users, total bundles created) are not period-scoped. Default is the previous 90 days.
 _Avoid_: Date range, 30-day window, 90-day window
 
 ### Analytics

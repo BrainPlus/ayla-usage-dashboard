@@ -16,6 +16,18 @@ def test_methodology_describes_prepare_time_as_median() -> None:
     assert "Avg prepare time" not in set(methodology["Field"])
 
 
+def test_methodology_describes_completed_session_definition() -> None:
+    methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
+
+    description = methodology[
+        methodology["Field"] == "Completed sessions"
+    ].iloc[0]["Description"]
+
+    assert "Session Complete" in description
+    assert "visitId + bundleId + sessionId" in description
+    assert "prepare-mode events are excluded" in description
+
+
 def test_methodology_includes_organisation_filter_when_selected() -> None:
     methodology = exporter.build_methodology_df(
         "eu",
