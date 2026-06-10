@@ -41,7 +41,7 @@ ALL Matomo queries for session/activity/step events MUST filter actions where:
   dimension10 == false
 This ensures we only count real delivered sessions, not therapists editing/preparing.
 Do not use the `customDimension10==false` Matomo segment: it returns no results on
-this instance. This filter does NOT apply to login/visit-level queries.
+this instance. 
 
 ## Database Schema (relevant tables)
 - users: id, email, organisation_id
