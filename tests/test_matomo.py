@@ -335,8 +335,10 @@ def test_get_step_completion_depth_excludes_users_outside_selected_scope(
                     "eventCategory": "Step",
                     "eventAction": "Step Complete",
                     "dimension10": "false",
+                    "dimension5": "s1",
                     "dimension6": "a1",
                     "dimension7": "step-uuid-1",
+                    "dimension14": "b1",
                 }
             ],
         }
