@@ -58,8 +58,25 @@ def build_methodology_df(
         (
             "Days since last completed session",
             "Calendar days since the organisation's most recent deliver-mode Session "
-            "Complete event in the last 365 days. Organisations without one show "
+            "Complete event across bundle history. Organisations without one show "
             "No recent session.",
+        ),
+        (
+            "Bundle progression",
+            "Unique configured CST sessions completed across the bundle's full "
+            "history, divided by the bundle's actual configured session count. "
+            "Completion events use the deduplicated Completed Sessions definition.",
+        ),
+        (
+            "Bundle stalled status",
+            "An incomplete bundle with at least one completion is flagged after "
+            "30 days without a newly completed configured session, with a separate "
+            "60+ day status.",
+        ),
+        (
+            "Session cadence",
+            "Average calendar days between the first completion dates of unique "
+            "configured sessions in a bundle.",
         ),
         (
             "Delivery funnel",
@@ -128,16 +145,18 @@ def build_excel_report(
     date_range: str,
     activity_usage_table: pd.DataFrame | None = None,
     org_filter_name=None,
+    bundle_progression: pd.DataFrame | None = None,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
 
     Sheets (in order):
         1. Organisation Summary
-        2. User Detail
-        3. Monthly Ratings
-        4. Activity Usage
-        5. Methodology
+        2. Bundle Progression
+        3. User Detail
+        4. Monthly Ratings
+        5. Activity Usage
+        6. Methodology
 
     All columns are auto-sized up to a maximum width of 50 characters.
 
@@ -148,17 +167,21 @@ def build_excel_report(
         region:                "uk" or "eu"
         date_range:            "YYYY-MM-DD,YYYY-MM-DD" for the reporting period
         activity_usage_table:  output of merger.build_activity_usage_table (optional)
+        bundle_progression:     output of merger.build_bundle_progression (optional)
 
     Returns:
         bytes of the .xlsx file
     """
     if activity_usage_table is None:
         activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
+    if bundle_progression is None:
+        bundle_progression = pd.DataFrame()
 
     methodology = build_methodology_df(region, date_range, org_filter_name=org_filter_name)
 
     sheets = [
         ("Organisation Summary", org_summary),
+        ("Bundle Progression", bundle_progression),
         ("User Detail", user_detail),
         ("Monthly Ratings", monthly_ratings),
         ("Activity Usage", activity_usage_table),

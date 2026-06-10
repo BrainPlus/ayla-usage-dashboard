@@ -35,6 +35,7 @@ _REPORT_DATA_KEYS = (
     "monthly_bundle_creations",
     "bundle_filter_breakdown",
     "bundle_counts",
+    "bundle_progression",
     "activity_catalogue",
     "activity_usage",
     "step_completion_depth",
@@ -118,6 +119,11 @@ _SECTION_HELP = {
         "Severity, age, and physical requirement preferences selected for bundles "
         "created during the reporting period. Missing preferences are shown as Not set."
     ),
+    "bundle_progression": (
+        "Configured CST session progression for each bundle across its full history. "
+        "Progress counts unique configured sessions with a deduplicated deliver-mode "
+        "Session Complete event. Incomplete bundles are flagged as stalled after 30 days."
+    ),
     "group_feedback_by_question": (
         "Monthly response-weighted ratings for each question answered by groups. "
         "The highlighted post-session feeling question is a feedback proxy, not a "
@@ -141,7 +147,7 @@ _SECTION_HELP = {
         "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
         "most recent recorded visit found within the last 365 days. Days since last "
-        "completed session uses deliver-mode Session Complete events from the last 365 days."
+        "completed session uses deliver-mode Session Complete events across bundle history."
     ),
     "talking_point_engagement": (
         "Approximate ratio of Talking Point Expand Clicks to Step Forward Clicks "
@@ -495,6 +501,20 @@ def _last_login_user_ids(
     return sorted(set(db_users["user_id"].astype(str)))
 
 
+def _bundle_history_date_range(
+    bundle_configurations: pd.DataFrame,
+    as_of_date: date,
+) -> str:
+    if "created_date" not in bundle_configurations:
+        return f"{as_of_date},{as_of_date}"
+    created_dates = pd.to_datetime(
+        bundle_configurations["created_date"], errors="coerce"
+    )
+    earliest = created_dates.min()
+    start_date = earliest.date() if pd.notna(earliest) else as_of_date
+    return f"{start_date},{as_of_date}"
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -668,6 +688,12 @@ if pull:
             bundle_counts = database.get_bundle_counts_per_org(
                 region, org_id=selected_org_id
             )
+            bundle_configurations = database.get_bundle_configurations(
+                region, org_id=selected_org_id
+            )
+            bundle_history_date_range = _bundle_history_date_range(
+                bundle_configurations, today
+            )
             monthly_bundle_creations = _get_monthly_bundle_creations(
                 region, start_date, end_date, org_id=selected_org_id,
             )
@@ -696,15 +722,15 @@ if pull:
             delivery_funnel = _cached_delivery_funnel(
                 date_range, region, selected_org_id
             )
-            recent_delivery_funnel = _cached_delivery_funnel(
-                "last365", region, selected_org_id
+            bundle_history_funnel = _cached_delivery_funnel(
+                bundle_history_date_range, region, selected_org_id
             )
             completed_sessions = delivery_funnel.loc[
                 delivery_funnel["completed_session"],
                 ["visit_id", "bundle_id", "session_id", "user_id"],
             ].reset_index(drop=True)
-            recent_completed_sessions = recent_delivery_funnel.loc[
-                recent_delivery_funnel["completed_session"],
+            completed_session_history = bundle_history_funnel.loc[
+                bundle_history_funnel["completed_session"],
                 [
                     "visit_id",
                     "bundle_id",
@@ -744,8 +770,8 @@ if pull:
         completed_sessions = _filter_to_database_users(
             completed_sessions, database_user_ids
         )
-        recent_completed_sessions = _filter_to_database_users(
-            recent_completed_sessions, database_user_ids
+        completed_session_history = _filter_to_database_users(
+            completed_session_history, database_user_ids
         )
         delivery_funnel = _filter_to_database_users(
             delivery_funnel, database_user_ids
@@ -788,13 +814,21 @@ if pull:
                 db_users, logins, last_login, visit_durations, activity_completions,
                 completed_sessions,
             )
+            bundle_progression = merger.build_bundle_progression(
+                bundle_configurations,
+                completed_session_history,
+                as_of_date=today,
+            )
             org_summary = merger.build_org_summary(
                 user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
                 delivery_funnel=delivery_funnel,
-                recent_completed_sessions=recent_completed_sessions,
+                recent_completed_sessions=completed_session_history,
                 as_of_date=today,
                 feedback_submissions=feedback_submissions,
+            )
+            org_summary = merger.add_bundle_progression_to_org_summary(
+                org_summary, bundle_progression
             )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
@@ -813,6 +847,7 @@ if pull:
             "monthly_bundle_creations": monthly_bundle_creations,
             "bundle_filter_breakdown": bundle_filter_breakdown,
             "bundle_counts": bundle_counts,
+            "bundle_progression": bundle_progression,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
             "step_completion_depth": step_completion_depth,
@@ -854,6 +889,10 @@ else:
     bundle_filter_breakdown = st.session_state.get(
         "bundle_filter_breakdown",
         pd.DataFrame(columns=["filter_type", "filter_value", "bundle_count"]),
+    )
+    bundle_progression = st.session_state.get(
+        "bundle_progression",
+        pd.DataFrame(),
     )
     fetched_start_date, fetched_end_date = (
         date.fromisoformat(value)
@@ -1279,6 +1318,13 @@ else:
                         "deliveries in separate visits are counted separately."
                     ),
                 ),
+                "full_programmes": st.column_config.NumberColumn(
+                    "Full programmes",
+                    help=(
+                        "Bundles that completed every configured CST session across "
+                        "their full history. A value above zero is a positive indicator."
+                    ),
+                ),
                 "group_feedback_coverage": st.column_config.TextColumn(
                     "Group feedback coverage",
                     help=(
@@ -1304,7 +1350,7 @@ else:
                     "Days since last completed session",
                     help=(
                         "Calendar days since the organisation's most recent deliver-mode "
-                        "Session Complete event in the last 365 days. Organisations without "
+                        "Session Complete event across bundle history. Organisations without "
                         "one show No recent session."
                     ),
                 ),
@@ -1344,6 +1390,58 @@ else:
             }),
             use_container_width=True,
         )
+
+        st.divider()
+        st.markdown(
+            "**Bundle Progression**",
+            help=_SECTION_HELP["bundle_progression"],
+        )
+        if bundle_progression.empty:
+            st.info("No bundles are available for the selected organisation scope.")
+        else:
+            st.dataframe(
+                bundle_progression,
+                column_config=_column_config_for(bundle_progression, {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "bundle_name": st.column_config.TextColumn("Bundle"),
+                    "bundle_id": st.column_config.TextColumn("Bundle ID"),
+                    "completed_configured_sessions": st.column_config.NumberColumn(
+                        "Completed configured sessions",
+                        help=(
+                            "Unique configured sessions with at least one deduplicated "
+                            "deliver-mode Session Complete event."
+                        ),
+                    ),
+                    "total_configured_sessions": st.column_config.NumberColumn(
+                        "Configured sessions",
+                        help="Actual number of sessions configured for this bundle.",
+                    ),
+                    "progress": st.column_config.TextColumn(
+                        "Progress",
+                        help="Completed configured sessions / total configured sessions.",
+                    ),
+                    "status": st.column_config.TextColumn(
+                        "Status",
+                        help=(
+                            "Incomplete bundles with no newly completed configured "
+                            "session in 30 or 60 days are flagged as stalled."
+                        ),
+                    ),
+                    "days_since_last_completion": st.column_config.NumberColumn(
+                        "Days since last completion",
+                    ),
+                    "avg_days_between_completions": st.column_config.NumberColumn(
+                        "Avg days between completions",
+                        help=(
+                            "Average calendar days between first completions of unique "
+                            "configured sessions."
+                        ),
+                        format="%.1f",
+                    ),
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
 
         st.divider()
         st.markdown(
@@ -1528,6 +1626,7 @@ if "user_detail" in st.session_state:
             _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
         ),
+        bundle_progression=st.session_state.get("bundle_progression", pd.DataFrame()),
         org_filter_name=(
             None
             if st.session_state.get("fetched_org_id") is None

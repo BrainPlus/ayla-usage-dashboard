@@ -118,7 +118,7 @@ def build_org_summary(
         delivery_funnel:        session instances with deliver_selected,
                                 active_delivery, and completed_session signals
         recent_completed_sessions:
-                                last-365-day completed sessions with completion_date
+                                completed session history with completion_date
         as_of_date:              date used to calculate session recency (defaults to today)
         feedback_submissions:    organisation_name, target, bundle_id, session_id,
                                  has_comment
@@ -484,6 +484,144 @@ def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.Data
     return completed_sessions.drop_duplicates(
         subset=["visit_id", "bundle_id", "session_id"]
     )
+
+
+def build_bundle_progression(
+    bundle_configurations: pd.DataFrame,
+    completed_sessions: pd.DataFrame,
+    as_of_date: date | None = None,
+) -> pd.DataFrame:
+    """
+    Build configured-session progression for each bundle.
+
+    Completion events must come from the deduplicated Completed Sessions metric.
+    Repeated deliveries remain valid completed-session instances, but each
+    configured session contributes at most once to bundle progression.
+    """
+    columns = [
+        "organisation_name",
+        "bundle_name",
+        "bundle_id",
+        "completed_configured_sessions",
+        "total_configured_sessions",
+        "progress",
+        "status",
+        "days_since_last_completion",
+        "avg_days_between_completions",
+    ]
+    if bundle_configurations.empty:
+        return pd.DataFrame(columns=columns)
+
+    completions = completed_sessions.copy()
+    if completions.empty:
+        completions = pd.DataFrame(
+            columns=["visit_id", "bundle_id", "session_id", "completion_date"]
+        )
+    else:
+        completions = _deduplicate_completed_sessions(completions)
+        completions["bundle_id"] = completions["bundle_id"].astype(str)
+        completions["session_id"] = completions["session_id"].astype(str)
+        completions["completion_date"] = pd.to_datetime(
+            completions["completion_date"], errors="coerce"
+        ).dt.normalize()
+
+    reference_date = pd.Timestamp(as_of_date or date.today())
+    records = []
+    for bundle in bundle_configurations.to_dict("records"):
+        configured_ids = [
+            str(session_id)
+            for session_id in (bundle.get("configured_session_ids") or [])
+            if session_id is not None
+        ]
+        configured_ids = list(dict.fromkeys(configured_ids))
+        configured_set = set(configured_ids)
+        bundle_id = str(bundle["bundle_id"])
+        bundle_completions = completions[
+            (completions["bundle_id"] == bundle_id)
+            & completions["session_id"].isin(configured_set)
+        ]
+        completed_count = bundle_completions["session_id"].nunique()
+        first_completions = (
+            bundle_completions.dropna(subset=["completion_date"])
+            .groupby("session_id", as_index=False)["completion_date"]
+            .min()
+            .sort_values("completion_date")
+        )
+
+        total_count = len(configured_ids)
+        last_completion = (
+            first_completions["completion_date"].max()
+            if completed_count
+            else pd.NaT
+        )
+        days_since = (
+            max(0, int((reference_date - last_completion).days))
+            if pd.notna(last_completion)
+            else pd.NA
+        )
+        cadence = (
+            first_completions["completion_date"].diff().dt.total_seconds().div(86400).mean()
+            if completed_count >= 2
+            else float("nan")
+        )
+
+        if total_count == 0:
+            status = "No configured sessions"
+        elif completed_count >= total_count:
+            status = "Complete"
+        elif completed_count == 0:
+            status = "Not started"
+        elif pd.notna(days_since) and days_since >= 60:
+            status = "Stalled 60+ days"
+        elif pd.notna(days_since) and days_since >= 30:
+            status = "Stalled 30+ days"
+        else:
+            status = "In progress"
+
+        records.append(
+            {
+                "organisation_name": bundle["organisation_name"],
+                "bundle_name": bundle["bundle_name"],
+                "bundle_id": bundle_id,
+                "completed_configured_sessions": completed_count,
+                "total_configured_sessions": total_count,
+                "progress": f"{completed_count} / {total_count}",
+                "status": status,
+                "days_since_last_completion": days_since,
+                "avg_days_between_completions": (
+                    round(float(cadence), 1) if pd.notna(cadence) else float("nan")
+                ),
+            }
+        )
+
+    result = pd.DataFrame(records, columns=columns)
+    result["days_since_last_completion"] = result[
+        "days_since_last_completion"
+    ].astype("Int64")
+    return result.sort_values(
+        ["organisation_name", "status", "bundle_name", "bundle_id"]
+    ).reset_index(drop=True)
+
+
+def add_bundle_progression_to_org_summary(
+    org_summary: pd.DataFrame,
+    bundle_progression: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add the number of fully completed configured programmes to each org."""
+    result = org_summary.copy()
+    if bundle_progression.empty:
+        result["full_programmes"] = 0
+        return result
+
+    full_programmes = (
+        bundle_progression[bundle_progression["status"] == "Complete"]
+        .groupby("organisation_name")
+        .size()
+    )
+    result["full_programmes"] = (
+        result["organisation_name"].map(full_programmes).fillna(0).astype(int)
+    )
+    return result
 
 
 def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame:

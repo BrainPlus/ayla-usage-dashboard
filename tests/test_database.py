@@ -21,6 +21,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -34,6 +35,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -47,6 +49,7 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -156,6 +159,28 @@ def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
 
     assert "GROUP BY organisation_name" in captured["sql"]
     assert "ORDER BY organisation_name" in captured["sql"]
+
+
+def test_get_bundle_configurations_reads_ordered_session_ids_without_select_star(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_bundle_configurations("eu")
+
+    assert "b.id::text AS bundle_id" in captured["sql"]
+    assert "b.configuration->'sessions'" in captured["sql"]
+    assert "configured_session->>'id'" in captured["sql"]
+    assert "WITH ORDINALITY" in captured["sql"]
+    assert "b.created_at::date AS created_date" in captured["sql"]
+    assert "SELECT * FROM bundles" not in captured["sql"]
 
 
 def test_monthly_bundle_creations_use_canonical_database_timestamp(monkeypatch) -> None:

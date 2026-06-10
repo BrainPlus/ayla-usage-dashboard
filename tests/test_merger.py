@@ -1221,3 +1221,109 @@ def test_daily_visit_activity_single_date_period() -> None:
     assert len(result) == 1
     assert result.iloc[0]["visits"] == 1
     assert result.iloc[0]["unique_users"] == 1
+
+
+def test_bundle_progression_uses_actual_configured_sessions_and_first_completions() -> None:
+    bundles = pd.DataFrame([
+        {
+            "bundle_id": "101",
+            "bundle_name": "Short programme",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1", "s2", "s3"],
+        },
+        {
+            "bundle_id": "102",
+            "bundle_name": "Complete programme",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1"],
+        },
+    ])
+    completions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-01"},
+        {"visit_id": "v1", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-01"},
+        {"visit_id": "v2", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-03"},
+        {"visit_id": "v3", "bundle_id": "101", "session_id": "s2", "completion_date": "2026-01-11"},
+        {"visit_id": "v4", "bundle_id": "101", "session_id": "not-configured", "completion_date": "2026-01-12"},
+        {"visit_id": "v5", "bundle_id": "102", "session_id": "s1", "completion_date": "2026-02-01"},
+    ])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 2, 15)
+    ).set_index("bundle_id")
+
+    assert result.loc["101", "progress"] == "2 / 3"
+    assert result.loc["101", "completed_configured_sessions"] == 2
+    assert result.loc["101", "total_configured_sessions"] == 3
+    assert result.loc["101", "avg_days_between_completions"] == 10.0
+    assert result.loc["101", "status"] == "Stalled 30+ days"
+    assert result.loc["102", "progress"] == "1 / 1"
+    assert result.loc["102", "status"] == "Complete"
+
+
+def test_bundle_progression_flags_60_day_stalls_and_not_started_bundles() -> None:
+    bundles = pd.DataFrame([
+        {
+            "bundle_id": "old",
+            "bundle_name": "Old",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1", "s2"],
+        },
+        {
+            "bundle_id": "new",
+            "bundle_name": "New",
+            "organisation_name": "Org B",
+            "configured_session_ids": ["s1"],
+        },
+    ])
+    completions = pd.DataFrame([{
+        "visit_id": "v1", "bundle_id": "old", "session_id": "s1",
+        "completion_date": "2026-01-01",
+    }])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 3, 15)
+    ).set_index("bundle_id")
+
+    assert result.loc["old", "status"] == "Stalled 60+ days"
+    assert result.loc["new", "status"] == "Not started"
+    assert pd.isna(result.loc["new", "days_since_last_completion"])
+
+
+def test_bundle_progression_counts_completion_when_date_is_missing() -> None:
+    bundles = pd.DataFrame([{
+        "bundle_id": "101",
+        "bundle_name": "Programme",
+        "organisation_name": "Org A",
+        "configured_session_ids": ["s1", "s2"],
+    }])
+    completions = pd.DataFrame([{
+        "visit_id": "v1", "bundle_id": "101", "session_id": "s1",
+        "completion_date": None,
+    }])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 3, 15)
+    ).iloc[0]
+
+    assert result["progress"] == "1 / 2"
+    assert result["status"] == "In progress"
+    assert pd.isna(result["days_since_last_completion"])
+
+
+def test_org_summary_adds_full_programme_positive_indicator() -> None:
+    org_summary = pd.DataFrame([
+        {"organisation_name": "Org A"},
+        {"organisation_name": "Org B"},
+    ])
+    progression = pd.DataFrame([
+        {"organisation_name": "Org A", "status": "Complete"},
+        {"organisation_name": "Org A", "status": "Complete"},
+        {"organisation_name": "Org B", "status": "In progress"},
+    ])
+
+    result = merger.add_bundle_progression_to_org_summary(
+        org_summary, progression
+    ).set_index("organisation_name")
+
+    assert result.loc["Org A", "full_programmes"] == 2
+    assert result.loc["Org B", "full_programmes"] == 0

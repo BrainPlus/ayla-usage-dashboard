@@ -4,7 +4,7 @@ Streamlit web app for the Ayla CST Assistant product team. Pulls analytics from 
 
 ## Product Context
 - Ayla is a Cognitive Stimulation Therapy (CST) web app for therapists
-- Therapists create groups (called "bundles" internally), each with 14 fixed sessions
+- Therapists create groups (called "bundles" internally), each with an ordered configured session array
 - Each session has activities (reality orientation, warm up, introduction, main activity)
 - Sessions have two modes: Prepare (edit mode) and Deliver (live session with patients)
 - At end of each delivered session: star rating feedback from the group AND from the therapist
@@ -46,7 +46,8 @@ this instance.
 ## Database Schema (relevant tables)
 - users: id, email, organisation_id
 - organisations: id, name
-- bundles: id, user_id (do NOT use SELECT * FROM bundles - too slow, always use targeted queries)
+- bundles: id, user_id, configuration (do NOT use SELECT * FROM bundles - too slow, always use targeted queries)
+  - configuration->sessions is the bundle's ordered configured session array; do not assume 14 sessions
   - bundles link to orgs via: bundles.user_id → users.id → users.organisation_id → organisations.id
 - feedback_questions: id, target (groups or therapists), questions (jsonb, 1-5 stars)
 - feedback_answers: id, feedback_question_id, user_id, answers (jsonb with bundleId + sessionId in metadata)

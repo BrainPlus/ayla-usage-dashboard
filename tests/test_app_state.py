@@ -118,6 +118,7 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "delivery_funnel",
         "monthly_bundle_creations",
         "bundle_filter_breakdown",
+        "bundle_progression",
         "monthly_average_star_ratings",
         "group_feedback_by_question",
         "therapist_feedback_by_question",
@@ -133,6 +134,21 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert all(app._SECTION_HELP.values())
     assert "selected date range" in app._SECTION_HELP["activity_usage"]
     assert "signal to investigate" in app._SECTION_HELP["step_completion_depth"]
+
+
+def test_bundle_history_date_range_starts_at_earliest_bundle(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    bundles = pd.DataFrame([
+        {"created_date": "2025-06-01"},
+        {"created_date": "2024-03-15"},
+    ])
+
+    assert app._bundle_history_date_range(
+        bundles, date(2026, 6, 10)
+    ) == "2024-03-15,2026-06-10"
+    assert app._bundle_history_date_range(
+        pd.DataFrame(), date(2026, 6, 10)
+    ) == "2026-06-10,2026-06-10"
 
 
 def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypatch) -> None:

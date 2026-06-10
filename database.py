@@ -133,6 +133,42 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
+    """
+    Loads each bundle's ordered configured session IDs and creation date.
+
+    Returns columns: bundle_id, bundle_name, organisation_name,
+    configured_session_ids, created_date.
+    """
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
+        SELECT
+            b.id::text AS bundle_id,
+            COALESCE(
+                NULLIF(BTRIM(b.name), ''),
+                NULLIF(BTRIM(b.configuration->>'title'), ''),
+                'Bundle ' || b.id::text
+            ) AS bundle_name,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            ARRAY(
+                SELECT configured_session->>'id'
+                FROM json_array_elements(
+                    COALESCE(b.configuration->'sessions', '[]'::json)
+                ) WITH ORDINALITY AS configured(configured_session, session_order)
+                WHERE configured_session->>'id' IS NOT NULL
+                ORDER BY session_order
+            ) AS configured_session_ids,
+            b.created_at::date AS created_date
+        FROM bundles b
+        JOIN users u ON u.id = b.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        {filter_sql}
+        ORDER BY organisation_name, bundle_name, b.id
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
 def get_monthly_bundle_creations(
     region: str,
     start_date: date,
