@@ -165,19 +165,6 @@ def _show_organisation_bundle_creation_chart(fetched_org_id) -> bool:
     return fetched_org_id is not None
 
 
-def _sort_org_summary(org_summary: pd.DataFrame, sort_by: str) -> pd.DataFrame:
-    sort_dimensions = {
-        "Country": ["country"],
-        "Sector": ["sector"],
-        "Country and sector": ["country", "sector"],
-    }.get(sort_by, [])
-    sort_columns = [
-        column for column in sort_dimensions + ["organisation_name"]
-        if column in org_summary
-    ]
-    return org_summary.sort_values(sort_columns).reset_index(drop=True)
-
-
 def _monthly_bundle_creation_chart(
     monthly_bundle_creations: pd.DataFrame,
     start_date: date,
@@ -859,11 +846,6 @@ else:
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
-        sort_by = st.selectbox(
-            "Sort organisations by",
-            ["None", "Country", "Sector", "Country and sector"],
-            key="organisation_group_by",
-        )
         if _show_organisation_bundle_creation_chart(
             st.session_state.get("fetched_org_id")
         ):
@@ -878,7 +860,7 @@ else:
             )
             _render_bundle_filter_breakdown(bundle_filter_breakdown)
         st.dataframe(
-            _sort_org_summary(org_summary, sort_by),
+            org_summary,
             column_config=_column_config_for(org_summary, {
                 "organisation_name": st.column_config.TextColumn(
                     help="Name of the care provider organisation",
