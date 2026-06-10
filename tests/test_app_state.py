@@ -180,6 +180,35 @@ def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypat
     ]
 
 
+def test_delivery_funnel_summary_clamps_negative_dropoff(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    result = app._delivery_funnel_summary(
+        {
+            "total_deliver_selected_sessions": 1,
+            "total_active_delivery_sessions": 2,
+            "total_completed_sessions": 3,
+        }
+    )
+
+    assert result.iloc[1:]["Drop-off from previous"].tolist() == [0.0, 0.0]
+    assert result.iloc[1:]["Drop-off %"].tolist() == [0.0, 0.0]
+
+
+def test_cached_delivery_funnel_reloads_stale_matomo_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_matomo = ModuleType("matomo")
+    fresh_matomo = ModuleType("matomo")
+    fresh_matomo.get_delivery_funnel_instances = (
+        lambda date_range, org_id=None: (date_range, org_id)
+    )
+    app.matomo = stale_matomo
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_matomo)
+
+    assert app._cached_delivery_funnel("last365", "eu", 196) == ("last365", 196)
+    assert app.matomo is fresh_matomo
+
+
 def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:
     app = _import_app(monkeypatch)
 

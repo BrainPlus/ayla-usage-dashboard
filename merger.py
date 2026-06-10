@@ -190,6 +190,9 @@ def build_org_summary(
         .size()
         .to_dict()
     )
+    completed_pair_keys = completed_pairs[
+        ["organisation_name", "bundle_id", "session_id"]
+    ]
     submission_columns = [
         "organisation_name",
         "target",
@@ -211,6 +214,11 @@ def build_org_summary(
             target_submissions.dropna(subset=["bundle_id", "session_id"])
             .drop_duplicates(
                 subset=["organisation_name", "bundle_id", "session_id"]
+            )
+            .merge(
+                completed_pair_keys,
+                on=["organisation_name", "bundle_id", "session_id"],
+                how="inner",
             )
             .groupby("organisation_name")
             .size()
@@ -352,13 +360,13 @@ def build_org_summary(
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
     agg["deliver_to_active_dropoff"] = (
         agg["deliver_selected_sessions"] - agg["active_delivery_sessions"]
-    )
+    ).clip(lower=0)
     agg["deliver_to_active_dropoff_pct"] = _dropoff_percentage(
         agg["deliver_to_active_dropoff"], agg["deliver_selected_sessions"]
     )
     agg["active_to_completed_dropoff"] = (
         agg["active_delivery_sessions"] - agg["completed_sessions"]
-    )
+    ).clip(lower=0)
     agg["active_to_completed_dropoff_pct"] = _dropoff_percentage(
         agg["active_to_completed_dropoff"], agg["active_delivery_sessions"]
     )
@@ -480,7 +488,11 @@ def _format_percentage(numerator: int, denominator: int) -> str:
 def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
     """Return one completed CST session per Matomo visit, bundle, and session."""
     if completed_sessions.empty:
-        return completed_sessions.copy()
+        result = completed_sessions.copy()
+        for column in ("visit_id", "bundle_id", "session_id", "user_id"):
+            if column not in result:
+                result[column] = pd.Series(dtype="object")
+        return result
     return completed_sessions.drop_duplicates(
         subset=["visit_id", "bundle_id", "session_id"]
     )

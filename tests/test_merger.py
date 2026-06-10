@@ -537,27 +537,31 @@ def test_feedback_coverage_uses_unique_bundle_session_pairs_and_submission_comme
     feedback_submissions = pd.DataFrame([
         {
             "organisation_name": "Org A", "target": "groups",
-            "bundle_id": "feedback-b1", "session_id": "s1", "has_comment": False,
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
         },
         {
             "organisation_name": "Org A", "target": "groups",
-            "bundle_id": "feedback-b1", "session_id": "s1", "has_comment": False,
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
         },
         {
             "organisation_name": "Org A", "target": "groups",
-            "bundle_id": "feedback-b1", "session_id": "s2", "has_comment": False,
+            "bundle_id": "b1", "session_id": "s2", "has_comment": False,
         },
         {
             "organisation_name": "Org A", "target": "therapists",
-            "bundle_id": "feedback-b1", "session_id": "s1", "has_comment": True,
+            "bundle_id": "b1", "session_id": "s1", "has_comment": True,
         },
         {
             "organisation_name": "Org A", "target": "therapists",
-            "bundle_id": "feedback-b1", "session_id": "s1", "has_comment": False,
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
         },
         {
             "organisation_name": "Org A", "target": "therapists",
-            "bundle_id": "feedback-b1", "session_id": "s2", "has_comment": True,
+            "bundle_id": "b1", "session_id": "s2", "has_comment": True,
+        },
+        {
+            "organisation_name": "Org A", "target": "groups",
+            "bundle_id": "b1", "session_id": "not-completed", "has_comment": False,
         },
     ])
     user_detail = merger.build_user_detail(
@@ -582,6 +586,12 @@ def test_feedback_coverage_uses_unique_bundle_session_pairs_and_submission_comme
     assert result["group_feedback_coverage"] == "67%"
     assert result["therapist_feedback_coverage"] == "67%"
     assert result["therapist_comment_rate"] == "67%"
+
+
+def test_empty_completed_sessions_guarantee_required_columns() -> None:
+    result = merger._deduplicate_completed_sessions(pd.DataFrame())
+
+    assert list(result.columns) == ["visit_id", "bundle_id", "session_id", "user_id"]
 
 
 def test_feedback_rates_show_no_sessions_for_organisations_without_completed_pairs() -> None:
@@ -760,6 +770,43 @@ def test_delivery_funnel_counts_and_dropoffs_are_aggregated_by_org() -> None:
     assert global_summary["total_deliver_selected_sessions"] == 2
     assert global_summary["total_active_delivery_sessions"] == 1
     assert global_summary["total_completed_sessions"] == 1
+
+
+def test_delivery_funnel_dropoffs_are_clamped_at_zero() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+    ])
+    delivery_funnel = completed_sessions.assign(
+        deliver_selected=[True, False],
+        active_delivery=[False, True],
+        completed_session=[True, True],
+    )
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    result = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+        delivery_funnel=delivery_funnel,
+    ).iloc[0]
+
+    assert result["deliver_to_active_dropoff"] == 0
+    assert result["deliver_to_active_dropoff_pct"] == 0.0
+    assert result["active_to_completed_dropoff"] == 0
+    assert result["active_to_completed_dropoff_pct"] == 0.0
 
 
 def test_build_activity_usage_table_known_ids() -> None:

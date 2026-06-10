@@ -257,7 +257,7 @@ def _delivery_funnel_summary(global_summary: dict) -> pd.DataFrame:
         zip(("Deliver Selected", "Active Delivery", "Completed Session"), counts)
     ):
         previous = counts[index - 1] if index > 0 else None
-        dropoff = previous - count if previous is not None else None
+        dropoff = max(0, previous - count) if previous is not None else None
         dropoff_pct = (
             round(dropoff / previous * 100, 1)
             if previous not in (None, 0)
@@ -393,6 +393,13 @@ def _get_login_form_outcomes(
     if not hasattr(matomo, "get_login_form_outcomes"):
         matomo = importlib.reload(matomo)
     return matomo.get_login_form_outcomes(date_range, allowed_user_ids)
+
+
+def _get_delivery_funnel_instances(date_range: str, org_id):
+    global matomo
+    if not hasattr(matomo, "get_delivery_funnel_instances"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_delivery_funnel_instances(date_range, org_id=org_id)
 
 
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
@@ -534,7 +541,7 @@ def _cached_login_form_outcomes(
 
 @st.cache_data(ttl=3600)
 def _cached_delivery_funnel(date_range: str, region: str, org_id):
-    return matomo.get_delivery_funnel_instances(date_range, org_id=org_id)
+    return _get_delivery_funnel_instances(date_range, org_id)
 
 
 @st.cache_data(ttl=3600)
