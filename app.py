@@ -259,32 +259,22 @@ def _build_monthly_bundle_creation_summary(
     )
 
 
-def _get_monthly_bundle_creations(
-    region, start_date, end_date, org_id, country=None, sector=None
-):
+def _get_monthly_bundle_creations(region, start_date, end_date, org_id):
     global database
     if not hasattr(database, "get_monthly_bundle_creations"):
         database = importlib.reload(database)
-    parameters = inspect.signature(database.get_monthly_bundle_creations).parameters
-    filters = {"org_id": org_id}
-    if "country" in parameters:
-        filters["country"] = country
-        filters["sector"] = sector
-    return database.get_monthly_bundle_creations(region, start_date, end_date, **filters)
+    return database.get_monthly_bundle_creations(
+        region, start_date, end_date, org_id=org_id
+    )
 
 
-def _get_bundle_filter_breakdown(
-    region, start_date, end_date, org_id, country=None, sector=None
-):
+def _get_bundle_filter_breakdown(region, start_date, end_date, org_id):
     global database
     if not hasattr(database, "get_bundle_filter_breakdown"):
         database = importlib.reload(database)
-    parameters = inspect.signature(database.get_bundle_filter_breakdown).parameters
-    filters = {"org_id": org_id}
-    if "country" in parameters:
-        filters["country"] = country
-        filters["sector"] = sector
-    return database.get_bundle_filter_breakdown(region, start_date, end_date, **filters)
+    return database.get_bundle_filter_breakdown(
+        region, start_date, end_date, org_id=org_id
+    )
 
 
 def _build_monthly_question_rating_summary(monthly_ratings):
@@ -852,12 +842,6 @@ else:
             column_config=_column_config_for(org_summary, {
                 "organisation_name": st.column_config.TextColumn(
                     help="Name of the care provider organisation",
-                ),
-                "country": st.column_config.TextColumn(
-                    help="Country associated with this organisation",
-                ),
-                "sector": st.column_config.TextColumn(
-                    help="Care sector associated with this organisation",
                 ),
                 "total_users": st.column_config.NumberColumn(
                     help="Total number of registered users in this organisation",

@@ -135,54 +135,6 @@ def test_get_organisations_orders_by_name(monkeypatch) -> None:
     assert result.iloc[0]["organisation_id"] == 196
 
 
-def test_get_organisations_normalises_null_country_and_sector(monkeypatch) -> None:
-    def fake_read_sql(sql, conn):
-        return pd.DataFrame(
-            [{
-                "organisation_id": 196,
-                "organisation_name": "Org A",
-                "country": None,
-                "sector": None,
-            }]
-        )
-
-    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
-    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
-
-    result = database.get_organisations("eu")
-
-    assert result.iloc[0]["country"] == "Unknown"
-    assert result.iloc[0]["sector"] == "Unknown"
-
-
-@pytest.mark.parametrize(
-    ("country", "sector", "expected_sql", "expected_params"),
-    [
-        ("Denmark", None, ["COALESCE(o.country::text, 'Unknown') = :country"], {"country": "Denmark"}),
-        (None, "Care home", ["COALESCE(o.sector::text, 'Unknown') = :sector"], {"sector": "Care home"}),
-        (
-            "Unknown",
-            "Care home",
-            [
-                "COALESCE(o.country::text, 'Unknown') = :country",
-                "COALESCE(o.sector::text, 'Unknown') = :sector",
-            ],
-            {"country": "Unknown", "sector": "Care home"},
-        ),
-    ],
-)
-def test_organisation_filter_supports_country_and_sector_independently(
-    country,
-    sector,
-    expected_sql,
-    expected_params,
-) -> None:
-    sql, params = database._organisation_filter(None, country, sector)
-
-    assert all(fragment in sql for fragment in expected_sql)
-    assert params == expected_params
-
-
 def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
     monkeypatch,
 ) -> None:

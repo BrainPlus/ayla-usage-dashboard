@@ -28,28 +28,12 @@ def get_engine(region: str):
     return create_engine(url)
 
 
-def _organisation_filter(
-    org_id,
-    country: str | None = None,
-    sector: str | None = None,
-    prefix: str = "WHERE",
-) -> tuple[str, dict | None]:
-    filters = []
-    params = {}
+def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | None]:
     if org_id == "unassigned":
-        filters.append("u.organisation_id IS NULL")
-    elif org_id is not None:
-        filters.append("u.organisation_id = :org_id")
-        params["org_id"] = org_id
-    if country is not None:
-        filters.append("COALESCE(o.country::text, 'Unknown') = :country")
-        params["country"] = country
-    if sector is not None:
-        filters.append("COALESCE(o.sector::text, 'Unknown') = :sector")
-        params["sector"] = sector
-    if not filters:
-        return "", None
-    return f"{prefix} {' AND '.join(filters)}", params or None
+        return f"{prefix} u.organisation_id IS NULL", None
+    if org_id is not None:
+        return f"{prefix} u.organisation_id = :org_id", {"org_id": org_id}
+    return "", None
 
 
 def get_organisations(region: str) -> pd.DataFrame:
@@ -57,46 +41,32 @@ def get_organisations(region: str) -> pd.DataFrame:
     sql = text("""
         SELECT
             id   AS organisation_id,
-            name AS organisation_name,
-            COALESCE(country::text, 'Unknown') AS country,
-            COALESCE(sector::text, 'Unknown') AS sector
+            name AS organisation_name
         FROM organisations
         ORDER BY name
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
-    for column in ("country", "sector"):
-        if column not in df:
-            df[column] = "Unknown"
     df["organisation_id"] = df["organisation_id"].astype(int)
     df["organisation_name"] = df["organisation_name"].astype(str)
-    df["country"] = df["country"].fillna("Unknown").astype(str)
-    df["sector"] = df["sector"].fillna("Unknown").astype(str)
     return df
 
 
-def load_users_and_orgs(
-    region: str,
-    org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
-) -> pd.DataFrame:
+def load_users_and_orgs(region: str, org_id=None) -> pd.DataFrame:
     """
     Loads all users joined with their organisation name.
 
     Returns one row per user with columns:
-        user_id (str), email (str), organisation_name (str), country (str), sector (str)
+        user_id (str), email (str), organisation_name (str)
 
     Users with no organisation are labelled "Unassigned / No organisation".
     """
-    filter_sql, params = _organisation_filter(org_id, country, sector)
+    filter_sql, params = _organisation_filter(org_id)
     sql = text(f"""
         SELECT
             u.id            AS user_id,
             u.email,
-            o.name          AS organisation_name,
-            COALESCE(o.country::text, 'Unknown') AS country,
-            COALESCE(o.sector::text, 'Unknown') AS sector
+            o.name          AS organisation_name
         FROM users u
         LEFT JOIN organisations o ON o.id = u.organisation_id
         {filter_sql}
@@ -105,31 +75,21 @@ def load_users_and_orgs(
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn, params=params)
 
-    for column in ("country", "sector"):
-        if column not in df:
-            df[column] = "Unknown"
     df["user_id"] = df["user_id"].astype(str)
     df["organisation_name"] = df["organisation_name"].fillna("Unassigned / No organisation")
-    df["country"] = df["country"].fillna("Unknown")
-    df["sector"] = df["sector"].fillna("Unknown")
     df["email"] = df["email"].fillna("")
 
     return df
 
 
-def get_org_user_counts(
-    region: str,
-    org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
-) -> pd.DataFrame:
+def get_org_user_counts(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts users per organisation.
 
     Returns columns: organisation_name (str), user_count (int)
     Users with no organisation are counted under "Unassigned / No organisation".
     """
-    filter_sql, params = _organisation_filter(org_id, country, sector)
+    filter_sql, params = _organisation_filter(org_id)
     sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
@@ -146,12 +106,7 @@ def get_org_user_counts(
     return df
 
 
-def get_bundle_counts_per_org(
-    region: str,
-    org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
-) -> pd.DataFrame:
+def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts the number of groups (bundles) created per organisation.
 
@@ -160,7 +115,7 @@ def get_bundle_counts_per_org(
     Note: never uses SELECT * FROM bundles — only fetches b.id and b.user_id.
     Relationship: bundles.user_id → users.id → users.organisation_id → organisations.id
     """
-    filter_sql, params = _organisation_filter(org_id, country, sector)
+    filter_sql, params = _organisation_filter(org_id)
     sql = text(f"""
         SELECT
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
@@ -183,8 +138,6 @@ def get_monthly_bundle_creations(
     start_date: date,
     end_date: date,
     org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
 ) -> pd.DataFrame:
     """
     Counts bundles created per calendar month and organisation.
@@ -194,9 +147,7 @@ def get_monthly_bundle_creations(
 
     Uses bundles.created_at as the canonical creation timestamp.
     """
-    filter_sql, org_params = _organisation_filter(
-        org_id, country, sector, prefix="AND"
-    )
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
     params = {
         "start": start_date,
         "end_exclusive": end_date + timedelta(days=1),
@@ -224,8 +175,6 @@ def get_bundle_filter_breakdown(
     start_date: date,
     end_date: date,
     org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
 ) -> pd.DataFrame:
     """
     Counts bundle filter preferences within the selected reporting period.
@@ -233,9 +182,7 @@ def get_bundle_filter_breakdown(
     Returns columns: filter_type (str), filter_value (str), bundle_count (int)
     Missing JSON values and empty strings are counted as "Not set".
     """
-    filter_sql, org_params = _organisation_filter(
-        org_id, country, sector, prefix="AND"
-    )
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
     params = {
         "start": start_date,
         "end_exclusive": end_date + timedelta(days=1),
@@ -285,8 +232,6 @@ def get_star_ratings_by_org(
     start_date: date,
     end_date: date,
     org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
 ) -> pd.DataFrame:
     """
     Calculates average star rating and response count per organisation and feedback target.
@@ -299,9 +244,7 @@ def get_star_ratings_by_org(
     Returns columns:
         organisation_name (str), target (str), avg_rating (float), total_responses (int)
     """
-    filter_sql, org_params = _organisation_filter(
-        org_id, country, sector, prefix="AND"
-    )
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
     params = {
         "start": start_date,
         "end_exclusive": end_date + timedelta(days=1),
@@ -334,8 +277,6 @@ def get_monthly_star_ratings(
     start_date: date,
     end_date: date,
     org_id=None,
-    country: str | None = None,
-    sector: str | None = None,
 ) -> pd.DataFrame:
     """
     Calculates average star rating per month, organisation, feedback target,
@@ -350,9 +291,7 @@ def get_monthly_star_ratings(
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
-    filter_sql, org_params = _organisation_filter(
-        org_id, country, sector, prefix="AND"
-    )
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
     params = {
         "start": start_date,
         "end_exclusive": end_date + timedelta(days=1),
