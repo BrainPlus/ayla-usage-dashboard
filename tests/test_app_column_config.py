@@ -42,3 +42,9 @@ def test_completed_sessions_are_configured_for_organisation_and_user_tables() ->
         "NumberColumn",
         "NumberColumn",
     ]
+
+
+def test_days_since_last_completed_session_is_a_sortable_text_column() -> None:
+    assert _column_config_constructor_names("days_since_last_completed_session") == [
+        "TextColumn",
+    ]

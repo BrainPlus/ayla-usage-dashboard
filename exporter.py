@@ -45,6 +45,12 @@ def build_methodology_df(
             "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
+            "Days since last completed session",
+            "Calendar days since the organisation's most recent deliver-mode Session "
+            "Complete event in the last 365 days. Organisations without one show "
+            "No recent session.",
+        ),
+        (
             "Delivery funnel",
             "Deliver Selected, Active Delivery, and Completed Session counts are each "
             "deduplicated by (Matomo visitId + bundleId + sessionId). Active Delivery "

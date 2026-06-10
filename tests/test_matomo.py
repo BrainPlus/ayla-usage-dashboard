@@ -187,6 +187,7 @@ def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_k
             "deliver_selected": True,
             "active_delivery": True,
             "completed_session": True,
+            "completed_session_date": "",
         },
         {
             "visit_id": "v1",
@@ -196,6 +197,7 @@ def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_k
             "deliver_selected": False,
             "active_delivery": False,
             "completed_session": False,
+            "completed_session_date": "",
         },
         {
             "visit_id": "v2",
@@ -205,8 +207,43 @@ def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_k
             "deliver_selected": True,
             "active_delivery": True,
             "completed_session": False,
+            "completed_session_date": "",
         },
     ]
+
+
+def test_delivery_funnel_uses_latest_deduplicated_completion_event_date(
+    monkeypatch,
+) -> None:
+    def completion(timestamp: int, mode: str = "false") -> dict:
+        return {
+            "type": "event",
+            "eventAction": "Session Complete",
+            "dimension10": mode,
+            "dimension14": "b1",
+            "dimension5": "s1",
+            "timestamp": timestamp,
+        }
+
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                completion(1767225600),
+                completion(1767312000),
+                completion(1767398400, mode="true"),
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    result = matomo.get_delivery_funnel_instances("last365")
+
+    assert len(result) == 1
+    assert result.iloc[0]["completed_session_date"] == "2026-01-02"
 
 
 def test_delivery_funnel_completed_stage_matches_completed_sessions(monkeypatch) -> None:

@@ -28,6 +28,18 @@ def test_methodology_describes_completed_session_definition() -> None:
     assert "prepare-mode events are excluded" in description
 
 
+def test_methodology_describes_days_since_last_completed_session() -> None:
+    methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
+
+    description = methodology[
+        methodology["Field"] == "Days since last completed session"
+    ].iloc[0]["Description"]
+
+    assert "deliver-mode Session Complete event" in description
+    assert "last 365 days" in description
+    assert "No recent session" in description
+
+
 def test_methodology_describes_delivery_funnel_and_dropoff() -> None:
     methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
 

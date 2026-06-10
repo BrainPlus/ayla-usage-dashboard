@@ -298,6 +298,7 @@ def get_delivery_funnel_instances(date_range: str, org_id=None) -> pd.DataFrame:
         "deliver_selected",
         "active_delivery",
         "completed_session",
+        "completed_session_date",
     ]
     data = _fetch_all_live_visits(
         {
@@ -855,6 +856,7 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
         "deliver_selected",
         "active_delivery",
         "completed_session",
+        "completed_session_date",
     ]
     instances: dict[tuple[str, str, str], dict] = {}
 
@@ -891,6 +893,7 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
                     "deliver_selected": False,
                     "has_active_signal": False,
                     "completed_session": False,
+                    "completed_session_date": "",
                 },
             )
             if event_action == _DELIVER_SELECTED_EVENT:
@@ -899,6 +902,10 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
                 instance["has_active_signal"] = True
             elif event_action == "Session Complete":
                 instance["completed_session"] = True
+                completion_date = _event_date(action, visit)
+                instance["completed_session_date"] = max(
+                    instance["completed_session_date"], completion_date
+                )
 
     records = []
     for instance in instances.values():
@@ -907,6 +914,22 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
         )
         records.append(instance)
     return pd.DataFrame(records, columns=columns)
+
+
+def _event_date(action: dict, visit: dict) -> str:
+    """Return an event's YYYY-MM-DD date, falling back to its visit date."""
+    timestamp = pd.to_datetime(action.get("timestamp"), unit="s", utc=True, errors="coerce")
+    if pd.notna(timestamp):
+        return timestamp.date().isoformat()
+
+    raw = (
+        action.get("serverDate")
+        or action.get("serverDateTime")
+        or visit.get("lastActionDateTime")
+        or visit.get("serverDate")
+        or ""
+    )
+    return str(raw)[:10]
 
 
 def _extract_dimension(obj: dict, dim_number: str) -> str:

@@ -6,6 +6,7 @@ from datetime import date
 import pandas as pd
 
 _NO_USAGE = "No tracked usage"
+_NO_RECENT_SESSION = "No recent session"
 _NO_ORG = "Unassigned / No organisation"
 _REAL_SESSION_MIN_SECONDS = 20 * 60
 
@@ -97,6 +98,8 @@ def build_org_summary(
     org_user_counts: pd.DataFrame,
     visit_durations: pd.DataFrame | None = None,
     delivery_funnel: pd.DataFrame | None = None,
+    recent_completed_sessions: pd.DataFrame | None = None,
+    as_of_date: date | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -112,6 +115,9 @@ def build_org_summary(
                                 (raw visits — used for org-level min/max real session time)
         delivery_funnel:        session instances with deliver_selected,
                                 active_delivery, and completed_session signals
+        recent_completed_sessions:
+                                last-365-day completed sessions with completion_date
+        as_of_date:              date used to calculate session recency (defaults to today)
 
     Returns:
         DataFrame with columns:
@@ -166,6 +172,44 @@ def build_org_summary(
         columns={"sessions": "completed_sessions"}
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
+
+    # --- days since last completed session: same deduplication as completed sessions ---
+    if recent_completed_sessions is not None and not recent_completed_sessions.empty:
+        recent = recent_completed_sessions.copy()
+        recent["completion_date"] = pd.to_datetime(
+            recent["completion_date"], errors="coerce"
+        ).dt.normalize()
+        recent = _deduplicate_completed_sessions(
+            recent.sort_values("completion_date", ascending=False)
+        ).merge(
+            user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+            on="user_id",
+            how="left",
+        )
+        last_completed_by_org = (
+            recent.dropna(subset=["completion_date"])
+            .groupby("organisation_name", as_index=False)["completion_date"]
+            .max()
+        )
+        reference_date = pd.Timestamp(as_of_date or date.today())
+        last_completed_by_org["days_since_last_completed_session"] = (
+            reference_date - last_completed_by_org["completion_date"]
+        ).dt.days.clip(lower=0)
+        agg = agg.merge(
+            last_completed_by_org[
+                ["organisation_name", "days_since_last_completed_session"]
+            ],
+            on="organisation_name",
+            how="left",
+        )
+    else:
+        agg["days_since_last_completed_session"] = pd.NA
+    agg["days_since_last_completed_session"] = (
+        agg["days_since_last_completed_session"]
+        .astype("Int64")
+        .astype("string")
+        .fillna(_NO_RECENT_SESSION)
+    )
 
     # --- delivery funnel: unique (visit_id, bundle_id, session_id) per org ---
     if delivery_funnel is not None and not delivery_funnel.empty:
@@ -324,6 +368,7 @@ def build_org_summary(
         "deliver_selected_sessions",
         "active_delivery_sessions",
         "completed_sessions",
+        "days_since_last_completed_session",
         "deliver_to_active_dropoff",
         "deliver_to_active_dropoff_pct",
         "active_to_completed_dropoff",
@@ -346,9 +391,8 @@ def _dropoff_percentage(dropoff: pd.Series, previous_stage: pd.Series) -> pd.Ser
 
 def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
     """Return one completed CST session per Matomo visit, bundle, and session."""
-    columns = ["visit_id", "bundle_id", "session_id", "user_id"]
     if completed_sessions.empty:
-        return pd.DataFrame(columns=columns)
+        return completed_sessions.copy()
     return completed_sessions.drop_duplicates(
         subset=["visit_id", "bundle_id", "session_id"]
     )

@@ -140,7 +140,8 @@ _SECTION_HELP = {
         "Organisation-level details. Logins, active users, session-duration metrics, "
         "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
-        "most recent recorded visit found within the last 365 days."
+        "most recent recorded visit found within the last 365 days. Days since last "
+        "completed session uses deliver-mode Session Complete events from the last 365 days."
     ),
     "talking_point_engagement": (
         "Approximate ratio of Talking Point Expand Clicks to Step Forward Clicks "
@@ -692,10 +693,25 @@ if pull:
             delivery_funnel = _cached_delivery_funnel(
                 date_range, region, selected_org_id
             )
+            recent_delivery_funnel = _cached_delivery_funnel(
+                "last365", region, selected_org_id
+            )
             completed_sessions = delivery_funnel.loc[
                 delivery_funnel["completed_session"],
                 ["visit_id", "bundle_id", "session_id", "user_id"],
             ].reset_index(drop=True)
+            recent_completed_sessions = recent_delivery_funnel.loc[
+                recent_delivery_funnel["completed_session"],
+                [
+                    "visit_id",
+                    "bundle_id",
+                    "session_id",
+                    "user_id",
+                    "completed_session_date",
+                ],
+            ].rename(columns={"completed_session_date": "completion_date"}).reset_index(
+                drop=True
+            )
             activity_completions = _cached_activity_completions(
                 date_range, region, selected_org_id
             )
@@ -724,6 +740,9 @@ if pull:
         logins = _filter_to_database_users(logins, database_user_ids)
         completed_sessions = _filter_to_database_users(
             completed_sessions, database_user_ids
+        )
+        recent_completed_sessions = _filter_to_database_users(
+            recent_completed_sessions, database_user_ids
         )
         delivery_funnel = _filter_to_database_users(
             delivery_funnel, database_user_ids
@@ -770,6 +789,8 @@ if pull:
                 user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
                 delivery_funnel=delivery_funnel,
+                recent_completed_sessions=recent_completed_sessions,
+                as_of_date=today,
             )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
@@ -1252,6 +1273,14 @@ else:
                         "Deliver-mode Session Complete events in the selected period, "
                         "deduplicated by Matomo visit + bundle + session ID. Repeat "
                         "deliveries in separate visits are counted separately."
+                    ),
+                ),
+                "days_since_last_completed_session": st.column_config.TextColumn(
+                    "Days since last completed session",
+                    help=(
+                        "Calendar days since the organisation's most recent deliver-mode "
+                        "Session Complete event in the last 365 days. Organisations without "
+                        "one show No recent session."
                     ),
                 ),
                 "deliver_to_active_dropoff": st.column_config.NumberColumn(

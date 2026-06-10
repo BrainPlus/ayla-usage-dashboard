@@ -524,6 +524,53 @@ def test_completed_sessions_are_consistent_across_user_org_and_global_summaries(
     assert global_summary["total_completed_sessions"] == 2
 
 
+def test_days_since_last_completed_session_uses_latest_deduplicated_session() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org B"},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+    )
+    recent_completed_sessions = pd.DataFrame([
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1",
+            "user_id": "u1", "completion_date": "2026-05-01",
+        },
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1",
+            "user_id": "u1", "completion_date": "2026-05-09",
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2",
+            "user_id": "u1", "completion_date": "2026-05-08",
+        },
+    ])
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([
+            {"organisation_name": "Org A", "user_count": 1},
+            {"organisation_name": "Org B", "user_count": 1},
+        ]),
+        visit_durations=_visit_durations([]),
+        recent_completed_sessions=recent_completed_sessions,
+        as_of_date=date(2026, 5, 10),
+    ).set_index("organisation_name")
+
+    assert org_summary.loc["Org A", "days_since_last_completed_session"] == "1"
+    assert (
+        org_summary.loc["Org B", "days_since_last_completed_session"]
+        == "No recent session"
+    )
+
+
 def test_delivery_funnel_counts_and_dropoffs_are_aggregated_by_org() -> None:
     db_users = pd.DataFrame([
         {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
