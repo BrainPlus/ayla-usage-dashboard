@@ -60,6 +60,47 @@ def test_should_clear_report(monkeypatch) -> None:
     assert app._should_clear_report({"global_summary": {}}, "eu", None, "range")
 
 
+def test_should_clear_report_when_country_or_sector_changes(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    loaded = {
+        "global_summary": {},
+        "fetched_region": "eu",
+        "fetched_org_id": None,
+        "fetched_date_range": "range",
+        "fetched_country": "Denmark",
+        "fetched_sector": "Care home",
+    }
+
+    assert not app._should_clear_report(
+        loaded, "eu", None, "range", "Denmark", "Care home"
+    )
+    assert app._should_clear_report(
+        loaded, "eu", None, "range", "Sweden", "Care home"
+    )
+    assert app._should_clear_report(
+        loaded, "eu", None, "range", "Denmark", "Hospital"
+    )
+
+
+def test_dimension_options_include_unknown_and_sort_organisations(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    organisations = pd.DataFrame(
+        [
+            {"organisation_name": "Org B", "country": "Unknown", "sector": "Hospital"},
+            {"organisation_name": "Org A", "country": "Denmark", "sector": "Care home"},
+            {"organisation_name": "Org C", "country": "Denmark", "sector": "Hospital"},
+        ]
+    )
+
+    assert app._dimension_options(organisations, "country") == [
+        "All",
+        "Denmark",
+        "Unknown",
+    ]
+    grouped = app._sort_org_summary(organisations, "Country and sector")
+    assert grouped["organisation_name"].tolist() == ["Org A", "Org C", "Org B"]
+
+
 def test_database_user_ids_are_normalised_for_raw_aggregate_filters(monkeypatch) -> None:
     app = _import_app(monkeypatch)
     db_users = pd.DataFrame([{"user_id": 1}, {"user_id": "u2"}])

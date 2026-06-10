@@ -12,7 +12,7 @@ import matomo
 import merger
 import exporter
 
-APP_REVISION = "2026-06-10-bundle-filter-breakdown"
+APP_REVISION = "2026-06-10-country-sector-breakdowns"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
@@ -41,6 +41,8 @@ _REPORT_DATA_KEYS = (
     "fetched_region",
     "fetched_org_id",
     "fetched_org_name",
+    "fetched_country",
+    "fetched_sector",
     "fetched_date_range",
 )
 
@@ -165,6 +167,25 @@ def _show_organisation_bundle_creation_chart(fetched_org_id) -> bool:
     return fetched_org_id is not None
 
 
+def _dimension_options(organisations: pd.DataFrame, column: str) -> list[str]:
+    if column not in organisations:
+        return ["All"]
+    return ["All"] + sorted(organisations[column].dropna().astype(str).unique().tolist())
+
+
+def _sort_org_summary(org_summary: pd.DataFrame, group_by: str) -> pd.DataFrame:
+    group_columns = {
+        "Country": ["country"],
+        "Sector": ["sector"],
+        "Country and sector": ["country", "sector"],
+    }.get(group_by, [])
+    sort_columns = [
+        column for column in group_columns + ["organisation_name"]
+        if column in org_summary
+    ]
+    return org_summary.sort_values(sort_columns).reset_index(drop=True)
+
+
 def _monthly_bundle_creation_chart(
     monthly_bundle_creations: pd.DataFrame,
     start_date: date,
@@ -259,22 +280,32 @@ def _build_monthly_bundle_creation_summary(
     )
 
 
-def _get_monthly_bundle_creations(region, start_date, end_date, org_id):
+def _get_monthly_bundle_creations(
+    region, start_date, end_date, org_id, country=None, sector=None
+):
     global database
     if not hasattr(database, "get_monthly_bundle_creations"):
         database = importlib.reload(database)
-    return database.get_monthly_bundle_creations(
-        region, start_date, end_date, org_id=org_id
-    )
+    parameters = inspect.signature(database.get_monthly_bundle_creations).parameters
+    filters = {"org_id": org_id}
+    if "country" in parameters:
+        filters["country"] = country
+        filters["sector"] = sector
+    return database.get_monthly_bundle_creations(region, start_date, end_date, **filters)
 
 
-def _get_bundle_filter_breakdown(region, start_date, end_date, org_id):
+def _get_bundle_filter_breakdown(
+    region, start_date, end_date, org_id, country=None, sector=None
+):
     global database
     if not hasattr(database, "get_bundle_filter_breakdown"):
         database = importlib.reload(database)
-    return database.get_bundle_filter_breakdown(
-        region, start_date, end_date, org_id=org_id
-    )
+    parameters = inspect.signature(database.get_bundle_filter_breakdown).parameters
+    filters = {"org_id": org_id}
+    if "country" in parameters:
+        filters["country"] = country
+        filters["sector"] = sector
+    return database.get_bundle_filter_breakdown(region, start_date, end_date, **filters)
 
 
 def _build_monthly_question_rating_summary(monthly_ratings):
@@ -375,6 +406,8 @@ def _should_clear_report(
     current_region: str,
     current_org_id,
     current_date_range: str,
+    current_country: str = "All",
+    current_sector: str = "All",
 ) -> bool:
     if not any(
         key in session_state
@@ -384,10 +417,14 @@ def _should_clear_report(
     fetched_region = session_state.get("fetched_region")
     fetched_org_id = session_state.get("fetched_org_id")
     fetched_date_range = session_state.get("fetched_date_range")
+    fetched_country = session_state.get("fetched_country", "All")
+    fetched_sector = session_state.get("fetched_sector", "All")
     return (
         fetched_region != current_region
         or fetched_org_id != current_org_id
         or fetched_date_range != current_date_range
+        or fetched_country != current_country
+        or fetched_sector != current_sector
     )
 
 
@@ -409,8 +446,10 @@ def _last_login_user_ids(
     db_users: pd.DataFrame,
     logins: pd.DataFrame,
     selected_org_id,
+    country_filter=None,
+    sector_filter=None,
 ) -> list[str]:
-    if selected_org_id is not None:
+    if selected_org_id is not None or country_filter is not None or sector_filter is not None:
         return sorted(set(db_users["user_id"].astype(str)))
     return sorted(
         set(db_users["user_id"].astype(str)) | set(logins["user_id"].astype(str))
@@ -502,6 +541,19 @@ with st.sidebar:
             ].iloc[0]
         )
 
+    selected_country = st.selectbox(
+        "Country",
+        _dimension_options(orgs_df, "country"),
+        key=f"country_filter_{region}",
+    )
+    selected_sector = st.selectbox(
+        "Sector",
+        _dimension_options(orgs_df, "sector"),
+        key=f"sector_filter_{region}",
+    )
+    country_filter = None if selected_country == "All" else selected_country
+    sector_filter = None if selected_sector == "All" else selected_sector
+
     today = date.today()
 
     start_date = st.date_input("From", today - timedelta(days=90), key="start_date")
@@ -516,7 +568,14 @@ if start_date > end_date:
 
 date_range = f"{start_date},{end_date}"
 
-if _should_clear_report(st.session_state, region, selected_org_id, date_range):
+if _should_clear_report(
+    st.session_state,
+    region,
+    selected_org_id,
+    date_range,
+    selected_country,
+    selected_sector,
+):
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)
 
@@ -526,20 +585,33 @@ if pull:
     try:
         # Step 1 — DB queries (fast)
         with st.spinner("Querying database..."):
-            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
-            org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
-            bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
+            db_users = database.load_users_and_orgs(
+                region,
+                org_id=selected_org_id,
+                country=country_filter,
+                sector=sector_filter,
+            )
+            org_user_counts = database.get_org_user_counts(
+                region, org_id=selected_org_id, country=country_filter, sector=sector_filter
+            )
+            bundle_counts = database.get_bundle_counts_per_org(
+                region, org_id=selected_org_id, country=country_filter, sector=sector_filter
+            )
             monthly_bundle_creations = _get_monthly_bundle_creations(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
+                country=country_filter, sector=sector_filter,
             )
             bundle_filter_breakdown = _get_bundle_filter_breakdown(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
+                country=country_filter, sector=sector_filter,
             )
             star_ratings = database.get_star_ratings_by_org(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
+                country=country_filter, sector=sector_filter,
             )
             monthly_ratings = database.get_monthly_star_ratings(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
+                country=country_filter, sector=sector_filter,
             )
             database_user_ids = _database_user_ids(db_users)
 
@@ -562,7 +634,7 @@ if pull:
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
         visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
 
-        if selected_org_id is not None:
+        if selected_org_id is not None or country_filter is not None or sector_filter is not None:
             logins = _filter_to_database_users(logins, database_user_ids)
             sessions = _filter_to_database_users(sessions, database_user_ids)
             activity_completions = _filter_to_database_users(
@@ -577,6 +649,8 @@ if pull:
             db_users,
             logins,
             selected_org_id,
+            country_filter,
+            sector_filter,
         )
 
         with st.status("Fetching last login dates...", expanded=True) as status:
@@ -625,6 +699,8 @@ if pull:
             "fetched_region": region,
             "fetched_org_id": selected_org_id,
             "fetched_org_name": selected_org_name,
+            "fetched_country": selected_country,
+            "fetched_sector": selected_sector,
             "fetched_date_range": date_range,
         })
 
@@ -824,6 +900,11 @@ else:
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
+        group_by = st.selectbox(
+            "Group organisations by",
+            ["None", "Country", "Sector", "Country and sector"],
+            key="organisation_group_by",
+        )
         if _show_organisation_bundle_creation_chart(
             st.session_state.get("fetched_org_id")
         ):
@@ -838,10 +919,16 @@ else:
             )
             _render_bundle_filter_breakdown(bundle_filter_breakdown)
         st.dataframe(
-            org_summary,
+            _sort_org_summary(org_summary, group_by),
             column_config=_column_config_for(org_summary, {
                 "organisation_name": st.column_config.TextColumn(
                     help="Name of the care provider organisation",
+                ),
+                "country": st.column_config.TextColumn(
+                    help="Country associated with this organisation",
+                ),
+                "sector": st.column_config.TextColumn(
+                    help="Care sector associated with this organisation",
                 ),
                 "total_users": st.column_config.NumberColumn(
                     help="Total number of registered users in this organisation",

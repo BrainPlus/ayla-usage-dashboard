@@ -7,6 +7,7 @@ import pandas as pd
 
 _NO_USAGE = "No tracked usage"
 _NO_ORG = "Unassigned / No organisation"
+_UNKNOWN = "Unknown"
 _REAL_SESSION_MIN_SECONDS = 20 * 60
 
 
@@ -22,7 +23,7 @@ def build_user_detail(
     canonical user list from the database.
 
     Args:
-        db_users:              user_id, email, organisation_name
+        db_users:              user_id, email, organisation_name, country, sector
         logins:                user_id, visits
         last_login:            user_id, last_login_date
         visit_durations:       user_id, visit_duration_seconds, has_deliver_action
@@ -30,11 +31,15 @@ def build_user_detail(
 
     Returns:
         DataFrame with columns:
-            user_id, email, organisation_name, last_login_date,
+            user_id, email, organisation_name, country, sector, last_login_date,
             logins, avg_real_session_minutes,
             median_prepare_minutes, short_visit_count, activities_completed
     """
     df = db_users.copy()
+    for column in ("country", "sector"):
+        if column not in df:
+            df[column] = _UNKNOWN
+        df[column] = df[column].fillna(_UNKNOWN)
     duration_metrics = _build_visit_duration_metrics(visit_durations)
 
     df = df.merge(
@@ -66,6 +71,8 @@ def build_user_detail(
         "user_id",
         "email",
         "organisation_name",
+        "country",
+        "sector",
         "last_login_date",
         "logins",
         "avg_real_session_minutes",
@@ -98,7 +105,7 @@ def build_org_summary(
 
     Returns:
         DataFrame with columns:
-            organisation_name, total_users, active_users,
+            organisation_name, country, sector, total_users, active_users,
             logins, avg_real_session_minutes,
             median_prepare_minutes, min_real_session_minutes, max_real_session_minutes,
             short_visit_count, sessions_delivered,
@@ -107,13 +114,14 @@ def build_org_summary(
     # --- aggregate user_detail by org ---
     # Exclude sentinel before taking max so real dates win
     real_logins = user_detail[user_detail["last_login_date"] != _NO_USAGE]
+    org_dimensions = ["organisation_name", "country", "sector"]
     last_login_by_org = (
-        real_logins.groupby("organisation_name")["last_login_date"]
+        real_logins.groupby(org_dimensions)["last_login_date"]
         .max()
         .reset_index()
     )
 
-    agg = user_detail.groupby("organisation_name").agg(
+    agg = user_detail.groupby(org_dimensions).agg(
         logins=("logins", "sum"),
         median_prepare_minutes=("median_prepare_minutes", lambda s: s[s > 0].median()),
         short_visit_count=("short_visit_count", "sum"),
@@ -121,7 +129,7 @@ def build_org_summary(
     ).reset_index()
 
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].round(1)
-    agg = agg.merge(last_login_by_org, on="organisation_name", how="left")
+    agg = agg.merge(last_login_by_org, on=org_dimensions, how="left")
     agg["last_login_date"] = agg["last_login_date"].fillna(_NO_USAGE)
 
     # --- total users per org ---
@@ -260,6 +268,8 @@ def build_org_summary(
 
     return agg[[
         "organisation_name",
+        "country",
+        "sector",
         "total_users",
         "active_users",
         "logins",

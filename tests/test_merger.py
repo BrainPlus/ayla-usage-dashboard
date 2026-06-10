@@ -129,6 +129,33 @@ def test_user_with_no_visits_gets_zero_duration_metrics() -> None:
     assert row["short_visit_count"] == 0
 
 
+def test_country_and_sector_flow_to_user_and_organisation_tables() -> None:
+    db_users = pd.DataFrame(
+        [{
+            "user_id": "u1",
+            "email": "u1@example.com",
+            "organisation_name": "Org A",
+            "country": None,
+            "sector": "Care home",
+        }]
+    )
+    user_detail = _build_user_detail(_visit_durations([]), db_users=db_users)
+
+    assert user_detail.iloc[0]["country"] == "Unknown"
+    assert user_detail.iloc[0]["sector"] == "Care home"
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+
+    assert org_summary.iloc[0]["country"] == "Unknown"
+    assert org_summary.iloc[0]["sector"] == "Care home"
+
+
 def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() -> None:
     with pd.option_context("future.no_silent_downcasting", True):
         user_detail = _build_user_detail(_visit_durations([]))
