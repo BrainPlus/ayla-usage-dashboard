@@ -45,6 +45,17 @@ def build_methodology_df(
             "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
+            "Feedback coverage",
+            "Unique bundleId + sessionId pairs with group or therapist feedback divided "
+            "by unique completed bundleId + sessionId pairs in the selected reporting "
+            "period. Organisations without completed sessions show No sessions.",
+        ),
+        (
+            "Therapist comment rate",
+            "Therapist feedback submissions with a non-empty comment divided by all "
+            "therapist feedback submissions in the selected reporting period.",
+        ),
+        (
             "Days since last completed session",
             "Calendar days since the organisation's most recent deliver-mode Session "
             "Complete event in the last 365 days. Organisations without one show "

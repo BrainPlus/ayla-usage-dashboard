@@ -7,6 +7,7 @@ import pandas as pd
 
 _NO_USAGE = "No tracked usage"
 _NO_RECENT_SESSION = "No recent session"
+_NO_SESSIONS = "No sessions"
 _NO_ORG = "Unassigned / No organisation"
 _REAL_SESSION_MIN_SECONDS = 20 * 60
 
@@ -100,6 +101,7 @@ def build_org_summary(
     delivery_funnel: pd.DataFrame | None = None,
     recent_completed_sessions: pd.DataFrame | None = None,
     as_of_date: date | None = None,
+    feedback_submissions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -118,6 +120,8 @@ def build_org_summary(
         recent_completed_sessions:
                                 last-365-day completed sessions with completion_date
         as_of_date:              date used to calculate session recency (defaults to today)
+        feedback_submissions:    organisation_name, target, bundle_id, session_id,
+                                 has_comment
 
     Returns:
         DataFrame with columns:
@@ -172,6 +176,75 @@ def build_org_summary(
         columns={"sessions": "completed_sessions"}
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
+
+    # --- feedback coverage: unique bundle/session pairs per org ---
+    completed_pairs = completed_sessions.merge(
+        user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+        on="user_id",
+        how="left",
+    ).drop_duplicates(
+        subset=["organisation_name", "bundle_id", "session_id"]
+    )
+    completed_pair_counts = (
+        completed_pairs.groupby("organisation_name")
+        .size()
+        .to_dict()
+    )
+    submission_columns = [
+        "organisation_name",
+        "target",
+        "bundle_id",
+        "session_id",
+        "has_comment",
+    ]
+    submissions = (
+        feedback_submissions.reindex(columns=submission_columns).copy()
+        if feedback_submissions is not None
+        else pd.DataFrame(columns=submission_columns)
+    )
+    for target, column in (
+        ("groups", "group_feedback_coverage"),
+        ("therapists", "therapist_feedback_coverage"),
+    ):
+        target_submissions = submissions[submissions["target"] == target]
+        feedback_pair_counts = (
+            target_submissions.dropna(subset=["bundle_id", "session_id"])
+            .drop_duplicates(
+                subset=["organisation_name", "bundle_id", "session_id"]
+            )
+            .groupby("organisation_name")
+            .size()
+            .to_dict()
+        )
+        agg[column] = agg["organisation_name"].map(
+            lambda org: _format_coverage_rate(
+                feedback_pair_counts.get(org, 0),
+                completed_pair_counts.get(org, 0),
+            )
+        )
+
+    therapist_submissions = submissions[submissions["target"] == "therapists"].copy()
+    if not therapist_submissions.empty:
+        therapist_submissions["has_comment"] = (
+            therapist_submissions["has_comment"].fillna(False).astype(bool)
+        )
+        therapist_comment_counts = (
+            therapist_submissions.groupby("organisation_name")["has_comment"]
+            .agg(["sum", "count"])
+            .to_dict("index")
+        )
+    else:
+        therapist_comment_counts = {}
+    agg["therapist_comment_rate"] = agg["organisation_name"].map(
+        lambda org: (
+            _NO_SESSIONS
+            if completed_pair_counts.get(org, 0) == 0
+            else _format_percentage(
+                therapist_comment_counts.get(org, {}).get("sum", 0),
+                therapist_comment_counts.get(org, {}).get("count", 0),
+            )
+        )
+    )
 
     # --- days since last completed session: same deduplication as completed sessions ---
     if recent_completed_sessions is not None and not recent_completed_sessions.empty:
@@ -368,6 +441,9 @@ def build_org_summary(
         "deliver_selected_sessions",
         "active_delivery_sessions",
         "completed_sessions",
+        "group_feedback_coverage",
+        "therapist_feedback_coverage",
+        "therapist_comment_rate",
         "days_since_last_completed_session",
         "deliver_to_active_dropoff",
         "deliver_to_active_dropoff_pct",
@@ -387,6 +463,18 @@ def _dropoff_percentage(dropoff: pd.Series, previous_stage: pd.Series) -> pd.Ser
         .fillna(0.0)
         .round(1)
     )
+
+
+def _format_coverage_rate(numerator: int, completed_pairs: int) -> str:
+    if completed_pairs == 0:
+        return _NO_SESSIONS
+    return _format_percentage(numerator, completed_pairs)
+
+
+def _format_percentage(numerator: int, denominator: int) -> str:
+    if denominator == 0:
+        return "0%"
+    return f"{int(numerator / denominator * 100 + 0.5)}%"
 
 
 def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:

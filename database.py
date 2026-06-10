@@ -272,6 +272,43 @@ def get_star_ratings_by_org(
     return df
 
 
+def get_feedback_submissions(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Loads feedback submissions in the selected reporting period.
+
+    Returns one row per feedback submission with columns:
+        organisation_name, target, bundle_id, session_id, has_comment
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        SELECT
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            fq.target,
+            fa.answers->'metadata'->>'bundleId' AS bundle_id,
+            fa.answers->'metadata'->>'sessionId' AS session_id,
+            NULLIF(BTRIM(fa.answers->>'comment'), '') IS NOT NULL AS has_comment
+        FROM feedback_answers fa
+        JOIN users u ON u.id = fa.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
+        {filter_sql}
+        ORDER BY organisation_name, fq.target
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
 def get_monthly_star_ratings(
     region: str,
     start_date: date,

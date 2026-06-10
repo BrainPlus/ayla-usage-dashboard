@@ -24,6 +24,7 @@ class _Engine:
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ]
@@ -36,6 +37,7 @@ class _Engine:
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ]
@@ -48,6 +50,7 @@ class _Engine:
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ],
@@ -77,6 +80,7 @@ def test_database_queries_apply_organisation_filter(
         "get_monthly_bundle_creations",
         "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
+        "get_feedback_submissions",
         "get_monthly_star_ratings",
     ):
         getattr(database, function_name)(
@@ -89,6 +93,7 @@ def test_database_queries_apply_organisation_filter(
         "get_monthly_bundle_creations",
         "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
+        "get_feedback_submissions",
         "get_monthly_star_ratings",
     ):
         assert captured["params"] == {
@@ -215,3 +220,31 @@ def test_monthly_ratings_join_answers_to_readable_question_labels(monkeypatch) -
     assert "AS question_label" in captured["sql"]
     assert "question->>'id' = ans->>'questionId'" in captured["sql"]
     assert "question_label" in captured["sql"]
+
+
+def test_feedback_submissions_extract_pairs_comments_and_reporting_period(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_feedback_submissions(
+        "eu", date(2026, 1, 1), date(2026, 1, 31)
+    )
+
+    assert "fa.answers->'metadata'->>'bundleId' AS bundle_id" in captured["sql"]
+    assert "fa.answers->'metadata'->>'sessionId' AS session_id" in captured["sql"]
+    assert "NULLIF(BTRIM(fa.answers->>'comment'), '') IS NOT NULL AS has_comment" in captured["sql"]
+    assert "fa.created_at >= :start" in captured["sql"]
+    assert "fa.created_at < :end_exclusive" in captured["sql"]
+    assert captured["params"] == {
+        "start": date(2026, 1, 1),
+        "end_exclusive": date(2026, 2, 1),
+    }

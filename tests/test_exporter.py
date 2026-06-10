@@ -40,6 +40,22 @@ def test_methodology_describes_days_since_last_completed_session() -> None:
     assert "No recent session" in description
 
 
+def test_methodology_describes_feedback_coverage_and_comment_rate() -> None:
+    methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
+
+    coverage = methodology[
+        methodology["Field"] == "Feedback coverage"
+    ].iloc[0]["Description"]
+    comment_rate = methodology[
+        methodology["Field"] == "Therapist comment rate"
+    ].iloc[0]["Description"]
+
+    assert "unique completed bundleId + sessionId pairs" in coverage
+    assert "selected reporting period" in coverage
+    assert "No sessions" in coverage
+    assert "non-empty comment" in comment_rate
+
+
 def test_methodology_describes_delivery_funnel_and_dropoff() -> None:
     methodology = exporter.build_methodology_df("eu", "2026-05-01,2026-05-31")
 

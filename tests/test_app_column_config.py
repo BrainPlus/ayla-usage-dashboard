@@ -48,3 +48,12 @@ def test_days_since_last_completed_session_is_a_sortable_text_column() -> None:
     assert _column_config_constructor_names("days_since_last_completed_session") == [
         "TextColumn",
     ]
+
+
+def test_feedback_rates_are_configured_as_text_columns() -> None:
+    for column in (
+        "group_feedback_coverage",
+        "therapist_feedback_coverage",
+        "therapist_comment_rate",
+    ):
+        assert _column_config_constructor_names(column) == ["TextColumn"]

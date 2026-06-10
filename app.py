@@ -677,6 +677,9 @@ if pull:
             star_ratings = database.get_star_ratings_by_org(
                 region, start_date, end_date, org_id=selected_org_id,
             )
+            feedback_submissions = database.get_feedback_submissions(
+                region, start_date, end_date, org_id=selected_org_id,
+            )
             monthly_ratings = database.get_monthly_star_ratings(
                 region, start_date, end_date, org_id=selected_org_id,
             )
@@ -791,6 +794,7 @@ if pull:
                 delivery_funnel=delivery_funnel,
                 recent_completed_sessions=recent_completed_sessions,
                 as_of_date=today,
+                feedback_submissions=feedback_submissions,
             )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
@@ -1273,6 +1277,27 @@ else:
                         "Deliver-mode Session Complete events in the selected period, "
                         "deduplicated by Matomo visit + bundle + session ID. Repeat "
                         "deliveries in separate visits are counted separately."
+                    ),
+                ),
+                "group_feedback_coverage": st.column_config.TextColumn(
+                    "Group feedback coverage",
+                    help=(
+                        "Unique bundle + CST session pairs with group feedback divided "
+                        "by unique completed bundle + CST session pairs in the selected period."
+                    ),
+                ),
+                "therapist_feedback_coverage": st.column_config.TextColumn(
+                    "Therapist feedback coverage",
+                    help=(
+                        "Unique bundle + CST session pairs with therapist feedback divided "
+                        "by unique completed bundle + CST session pairs in the selected period."
+                    ),
+                ),
+                "therapist_comment_rate": st.column_config.TextColumn(
+                    "Therapist comment rate",
+                    help=(
+                        "Therapist feedback submissions with a non-empty comment divided "
+                        "by all therapist feedback submissions in the selected period."
                     ),
                 ),
                 "days_since_last_completed_session": st.column_config.TextColumn(
