@@ -308,7 +308,7 @@ def _cached_visit_durations(date_range: str, region: str, org_id):
 
 
 @st.cache_data(ttl=3600)
-def _cached_login_visits(date_range: str, region: str, org_id):
+def _cached_visit_dates(date_range: str, region: str, org_id):
     return matomo.get_visit_dates(date_range, org_id=org_id)
 
 
@@ -398,7 +398,7 @@ if pull:
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
-            login_visits = _cached_login_visits(date_range, region, selected_org_id)
+            visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
 
         if selected_org_id is not None:
             org_user_ids = set(db_users["user_id"].astype(str))
@@ -408,7 +408,7 @@ if pull:
                 activity_completions, org_user_ids
             )
             visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
-            login_visits = _filter_to_org_users(login_visits, org_user_ids)
+            visit_dates = _filter_to_org_users(visit_dates, org_user_ids)
 
         # Step 3 — Last login per user (slowest — show progress)
         all_user_ids = _last_login_user_ids(
@@ -444,7 +444,7 @@ if pull:
                 org_summary, bundle_counts, star_ratings
             )
             daily_visit_activity = merger.build_daily_visit_activity(
-                login_visits, start_date, end_date
+                visit_dates, start_date, end_date
             )
 
         st.session_state.update({

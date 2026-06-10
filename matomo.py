@@ -255,6 +255,7 @@ def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
             "method": "Live.getLastVisitsDetails",
             "period": "range",
             "date": date_range,
+            "doNotFetchActions": 1,
         }
     )
 
