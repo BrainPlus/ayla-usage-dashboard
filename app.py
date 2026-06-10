@@ -12,15 +12,26 @@ import matomo
 import merger
 import exporter
 
-APP_REVISION = "2026-06-08-global-summary-compat-v2"
+APP_REVISION = "2026-06-10-dashboard-foundation"
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
+
+_OUTCOME_PROXY_QUESTION = "How do you feel after today's session?"
+_OUTCOME_PROXY_CHART_LABEL = (
+    f"{_OUTCOME_PROXY_QUESTION} (not a clinical outcome)"
+)
+_QUESTION_CHART_COLORS = {
+    "groups": ["#1f77b4", "#2ca02c", "#17becf"],
+    "therapists": ["#9467bd", "#17becf", "#8c564b", "#7f7f7f"],
+}
 
 _REPORT_DATA_KEYS = (
     "user_detail",
     "org_summary",
     "global_summary",
     "monthly_ratings",
+    "monthly_bundle_creations",
+    "bundle_filter_breakdown",
     "bundle_counts",
     "activity_catalogue",
     "activity_usage",
@@ -82,6 +93,22 @@ _SECTION_HELP = {
         "Response-weighted average group and therapist ratings submitted during the "
         "selected date range, grouped by calendar month."
     ),
+    "monthly_bundle_creations": (
+        "Bundles created during the selected reporting period, grouped by calendar "
+        "month. Uses the database bundle creation timestamp."
+    ),
+    "bundle_filter_breakdown": (
+        "Severity, age, and physical requirement preferences selected for bundles "
+        "created during the reporting period. Missing preferences are shown as Not set."
+    ),
+    "group_feedback_by_question": (
+        "Monthly response-weighted ratings for each question answered by groups. "
+        "The highlighted post-session feeling question is a feedback proxy, not a "
+        "clinical outcome."
+    ),
+    "therapist_feedback_by_question": (
+        "Monthly response-weighted ratings for each question answered by therapists."
+    ),
     "activity_usage": (
         "Activity Complete events recorded during the selected date range and "
         "organisation scope. Only activities completed in deliver mode are counted. "
@@ -130,10 +157,132 @@ def _show_user_organisation_filter(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
+def _show_global_bundle_creation_chart(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
+def _show_organisation_bundle_creation_chart(fetched_org_id) -> bool:
+    return fetched_org_id is not None
+
+
+def _monthly_bundle_creation_chart(
+    monthly_bundle_creations: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    summary = _build_monthly_bundle_creation_summary(
+        monthly_bundle_creations, start_date, end_date
+    )
+    return summary.set_index("month").rename(
+        columns={"bundles_created": "Bundles created"}
+    )
+
+
+def _bundle_filter_chart(
+    bundle_filter_breakdown: pd.DataFrame,
+    filter_type: str,
+) -> pd.DataFrame:
+    if bundle_filter_breakdown.empty:
+        return pd.DataFrame(columns=["Bundles"])
+    return (
+        bundle_filter_breakdown[
+            bundle_filter_breakdown["filter_type"] == filter_type
+        ]
+        .sort_values(["bundle_count", "filter_value"], ascending=[False, True])
+        .set_index("filter_value")[["bundle_count"]]
+        .rename(columns={"bundle_count": "Bundles"})
+    )
+
+
+def _render_bundle_filter_breakdown(bundle_filter_breakdown: pd.DataFrame) -> None:
+    st.markdown(
+        "**Bundle Filter Preferences**",
+        help=_SECTION_HELP["bundle_filter_breakdown"],
+    )
+    if bundle_filter_breakdown.empty:
+        st.info("No bundles were created in the selected reporting period.")
+        return
+
+    columns = st.columns(3)
+    for column, (filter_type, label) in zip(
+        columns,
+        (
+            ("severity", "Severity"),
+            ("age", "Age"),
+            ("physical_requirement", "Physical requirement"),
+        ),
+    ):
+        column.markdown(f"**{label}**")
+        column.bar_chart(_bundle_filter_chart(bundle_filter_breakdown, filter_type))
+
+
+def _monthly_question_chart(monthly_ratings: pd.DataFrame, target: str):
+    summary = _build_monthly_question_rating_summary(monthly_ratings)
+    target_ratings = summary[summary["target"] == target]
+    if target_ratings.empty:
+        return pd.DataFrame(), []
+
+    chart = target_ratings.pivot(
+        index="month", columns="question_label", values="avg_rating"
+    )
+    chart.columns.name = None
+    if _OUTCOME_PROXY_QUESTION in chart.columns:
+        chart = chart.rename(
+            columns={_OUTCOME_PROXY_QUESTION: _OUTCOME_PROXY_CHART_LABEL}
+        )
+
+    default_colors = _QUESTION_CHART_COLORS[target]
+    colors = [
+        "#ff7f0e"
+        if question == _OUTCOME_PROXY_CHART_LABEL
+        else default_colors[index % len(default_colors)]
+        for index, question in enumerate(chart.columns)
+    ]
+    return chart, colors
+
+
 # ── deploy-compatibility helpers ──────────────────────────────────────────────
 # These wrappers guard against Streamlit's module-caching during hot deploys.
 # Stale cached module objects may lack new functions or accept fewer arguments.
 # Commits 18d5df5, c814074, 44be948 document when each guard was needed.
+
+def _build_monthly_bundle_creation_summary(
+    monthly_bundle_creations,
+    start_date,
+    end_date,
+):
+    global merger
+    if not hasattr(merger, "build_monthly_bundle_creation_summary"):
+        merger = importlib.reload(merger)
+    return merger.build_monthly_bundle_creation_summary(
+        monthly_bundle_creations, start_date, end_date
+    )
+
+
+def _get_monthly_bundle_creations(region, start_date, end_date, org_id):
+    global database
+    if not hasattr(database, "get_monthly_bundle_creations"):
+        database = importlib.reload(database)
+    return database.get_monthly_bundle_creations(
+        region, start_date, end_date, org_id=org_id
+    )
+
+
+def _get_bundle_filter_breakdown(region, start_date, end_date, org_id):
+    global database
+    if not hasattr(database, "get_bundle_filter_breakdown"):
+        database = importlib.reload(database)
+    return database.get_bundle_filter_breakdown(
+        region, start_date, end_date, org_id=org_id
+    )
+
+
+def _build_monthly_question_rating_summary(monthly_ratings):
+    global merger
+    if not hasattr(merger, "build_monthly_question_rating_summary"):
+        merger = importlib.reload(merger)
+    return merger.build_monthly_question_rating_summary(monthly_ratings)
+
 
 def _get_activity_usage_by_id(
     date_range: str,
@@ -242,22 +391,24 @@ def _should_clear_report(
     )
 
 
-def _filter_to_org_users(df: pd.DataFrame, org_user_ids: set[str]) -> pd.DataFrame:
+def _database_user_ids(db_users: pd.DataFrame) -> frozenset[str]:
+    return frozenset(db_users["user_id"].astype(str))
+
+
+def _filter_to_database_users(
+    df: pd.DataFrame,
+    database_user_ids: frozenset[str],
+) -> pd.DataFrame:
+    """Apply the selected database scope before aggregating raw Matomo rows."""
     if "user_id" not in df.columns:
         return df
-    return df[df["user_id"].isin(org_user_ids)].reset_index(drop=True)
+    return df[df["user_id"].astype(str).isin(database_user_ids)].reset_index(drop=True)
 
 
 def _last_login_user_ids(
     db_users: pd.DataFrame,
-    logins: pd.DataFrame,
-    selected_org_id,
 ) -> list[str]:
-    if selected_org_id is not None:
-        return sorted(set(db_users["user_id"].astype(str)))
-    return sorted(
-        set(db_users["user_id"].astype(str)) | set(logins["user_id"].astype(str))
-    )
+    return sorted(set(db_users["user_id"].astype(str)))
 
 
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
@@ -359,7 +510,12 @@ if start_date > end_date:
 
 date_range = f"{start_date},{end_date}"
 
-if _should_clear_report(st.session_state, region, selected_org_id, date_range):
+if _should_clear_report(
+    st.session_state,
+    region,
+    selected_org_id,
+    date_range,
+):
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)
 
@@ -369,15 +525,29 @@ if pull:
     try:
         # Step 1 — DB queries (fast)
         with st.spinner("Querying database..."):
-            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
-            org_user_counts = database.get_org_user_counts(region, org_id=selected_org_id)
-            bundle_counts = database.get_bundle_counts_per_org(region, org_id=selected_org_id)
+            db_users = database.load_users_and_orgs(
+                region,
+                org_id=selected_org_id,
+            )
+            org_user_counts = database.get_org_user_counts(
+                region, org_id=selected_org_id
+            )
+            bundle_counts = database.get_bundle_counts_per_org(
+                region, org_id=selected_org_id
+            )
+            monthly_bundle_creations = _get_monthly_bundle_creations(
+                region, start_date, end_date, org_id=selected_org_id,
+            )
+            bundle_filter_breakdown = _get_bundle_filter_breakdown(
+                region, start_date, end_date, org_id=selected_org_id,
+            )
             star_ratings = database.get_star_ratings_by_org(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
             )
             monthly_ratings = database.get_monthly_star_ratings(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=selected_org_id,
             )
+            database_user_ids = _database_user_ids(db_users)
 
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
@@ -387,35 +557,27 @@ if pull:
                 date_range, region, selected_org_id
             )
             activity_catalogue = _cached_activity_catalogue()
-            allowed_user_ids = (
-                frozenset(db_users["user_id"].astype(str))
-                if selected_org_id is not None
-                else None
-            )
             activity_usage = _cached_activity_usage(
-                date_range, region, selected_org_id, allowed_user_ids
+                date_range, region, selected_org_id, database_user_ids
             )
             visit_durations = _cached_visit_durations(
                 date_range, region, selected_org_id
             )
             visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
 
-        if selected_org_id is not None:
-            org_user_ids = set(db_users["user_id"].astype(str))
-            logins = _filter_to_org_users(logins, org_user_ids)
-            sessions = _filter_to_org_users(sessions, org_user_ids)
-            activity_completions = _filter_to_org_users(
-                activity_completions, org_user_ids
-            )
-            visit_durations = _filter_to_org_users(visit_durations, org_user_ids)
-            visit_dates = _filter_to_org_users(visit_dates, org_user_ids)
+        # Raw aggregates must be scoped to selected-region DB users before aggregation.
+        logins = _filter_to_database_users(logins, database_user_ids)
+        sessions = _filter_to_database_users(sessions, database_user_ids)
+        activity_completions = _filter_to_database_users(
+            activity_completions, database_user_ids
+        )
+        visit_durations = _filter_to_database_users(
+            visit_durations, database_user_ids
+        )
+        visit_dates = _filter_to_database_users(visit_dates, database_user_ids)
 
         # Step 3 — Last login per user (slowest — show progress)
-        all_user_ids = _last_login_user_ids(
-            db_users,
-            logins,
-            selected_org_id,
-        )
+        all_user_ids = _last_login_user_ids(db_users)
 
         with st.status("Fetching last login dates...", expanded=True) as status:
             progress_bar = st.progress(0)
@@ -452,6 +614,8 @@ if pull:
             "org_summary": org_summary,
             "global_summary": global_summary,
             "monthly_ratings": monthly_ratings,
+            "monthly_bundle_creations": monthly_bundle_creations,
+            "bundle_filter_breakdown": bundle_filter_breakdown,
             "bundle_counts": bundle_counts,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
@@ -483,6 +647,18 @@ else:
     org_summary = st.session_state["org_summary"]
     user_detail = st.session_state["user_detail"]
     monthly_ratings = st.session_state["monthly_ratings"]
+    monthly_bundle_creations = st.session_state.get(
+        "monthly_bundle_creations",
+        pd.DataFrame(columns=["month", "organisation_name", "bundles_created"]),
+    )
+    bundle_filter_breakdown = st.session_state.get(
+        "bundle_filter_breakdown",
+        pd.DataFrame(columns=["filter_type", "filter_value", "bundle_count"]),
+    )
+    fetched_start_date, fetched_end_date = (
+        date.fromisoformat(value)
+        for value in st.session_state["fetched_date_range"].split(",")
+    )
 
     # ── Tab 1: Global Overview ────────────────────────────────────────────────
     with tab1:
@@ -511,6 +687,18 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
+
+        if _show_global_bundle_creation_chart(fetched_org_id):
+            st.markdown(
+                "**Monthly Bundle Creations**",
+                help=_SECTION_HELP["monthly_bundle_creations"],
+            )
+            st.bar_chart(
+                _monthly_bundle_creation_chart(
+                    monthly_bundle_creations, fetched_start_date, fetched_end_date
+                )
+            )
+            _render_bundle_filter_breakdown(bundle_filter_breakdown)
 
         st.markdown(
             "**Daily Visit Activity**",
@@ -542,6 +730,34 @@ else:
             st.line_chart(monthly_pivot)
         else:
             st.info("No monthly rating data available.")
+
+        st.markdown(
+            "**Group Feedback by Question**",
+            help=_SECTION_HELP["group_feedback_by_question"],
+        )
+        group_question_chart, group_question_colors = _monthly_question_chart(
+            monthly_ratings, "groups"
+        )
+        if not group_question_chart.empty:
+            st.caption(
+                "The highlighted post-session feeling question is the closest "
+                "feedback proxy to an outcome measure, but it is not a clinical outcome."
+            )
+            st.line_chart(group_question_chart, color=group_question_colors)
+        else:
+            st.info("No group question rating data available.")
+
+        st.markdown(
+            "**Therapist Feedback by Question**",
+            help=_SECTION_HELP["therapist_feedback_by_question"],
+        )
+        therapist_question_chart, therapist_question_colors = _monthly_question_chart(
+            monthly_ratings, "therapists"
+        )
+        if not therapist_question_chart.empty:
+            st.line_chart(therapist_question_chart, color=therapist_question_colors)
+        else:
+            st.info("No therapist question rating data available.")
 
         st.divider()
         st.subheader("Activity Usage", help=_SECTION_HELP["activity_usage"])
@@ -608,6 +824,19 @@ else:
     # ── Tab 2: By Organisation ────────────────────────────────────────────────
     with tab2:
         st.subheader("By Organisation", help=_SECTION_HELP["by_organisation"])
+        if _show_organisation_bundle_creation_chart(
+            st.session_state.get("fetched_org_id")
+        ):
+            st.markdown(
+                "**Monthly Bundle Creations**",
+                help=_SECTION_HELP["monthly_bundle_creations"],
+            )
+            st.bar_chart(
+                _monthly_bundle_creation_chart(
+                    monthly_bundle_creations, fetched_start_date, fetched_end_date
+                )
+            )
+            _render_bundle_filter_breakdown(bundle_filter_breakdown)
         st.dataframe(
             org_summary,
             column_config=_column_config_for(org_summary, {

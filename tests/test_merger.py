@@ -32,11 +32,12 @@ def _build_user_detail(
     visit_durations: pd.DataFrame,
     db_users: pd.DataFrame | None = None,
     logins: pd.DataFrame | None = None,
+    last_login: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     return merger.build_user_detail(
         db_users if db_users is not None else _base_users(),
         logins if logins is not None else _empty(["user_id", "visits"]),
-        _empty(["user_id", "last_login_date"]),
+        last_login if last_login is not None else _empty(["user_id", "last_login_date"]),
         visit_durations,
         _empty(["user_id", "activities_completed"]),
     )
@@ -127,6 +128,25 @@ def test_user_with_no_visits_gets_zero_duration_metrics() -> None:
     assert row["avg_real_session_minutes"] == 0.0
     assert row["median_prepare_minutes"] == 0.0
     assert row["short_visit_count"] == 0
+
+
+def test_empty_last_login_uses_no_usage_fallback_for_user_and_org() -> None:
+    user_detail = _build_user_detail(
+        _visit_durations([]),
+        last_login=pd.DataFrame([{"user_id": "u1", "last_login_date": ""}]),
+    )
+
+    assert user_detail.iloc[0]["last_login_date"] == "No tracked usage"
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+    )
+
+    assert org_summary.iloc[0]["last_login_date"] == "No tracked usage"
 
 
 def test_empty_visit_durations_keep_duration_averages_numeric_for_org_summary() -> None:
@@ -735,6 +755,96 @@ def test_build_monthly_rating_summary_weights_ratings_by_response_count() -> Non
     assert result.to_dict("records") == [
         {"month": "2026-05", "target": "groups", "avg_rating": 4.6}
     ]
+
+
+def test_monthly_bundle_creation_summary_aggregates_orgs_and_zero_fills() -> None:
+    monthly_creations = pd.DataFrame(
+        [
+            {"month": "2026-01", "organisation_name": "Org A", "bundles_created": 2},
+            {"month": "2026-01", "organisation_name": "Org B", "bundles_created": 3},
+            {"month": "2026-03", "organisation_name": "Org A", "bundles_created": 1},
+        ]
+    )
+
+    result = merger.build_monthly_bundle_creation_summary(
+        monthly_creations, date(2026, 1, 15), date(2026, 3, 2)
+    )
+
+    assert result.to_dict("records") == [
+        {"month": "2026-01", "bundles_created": 5},
+        {"month": "2026-02", "bundles_created": 0},
+        {"month": "2026-03", "bundles_created": 1},
+    ]
+
+
+def test_monthly_bundle_creation_summary_zero_fills_empty_period() -> None:
+    result = merger.build_monthly_bundle_creation_summary(
+        _empty(["month", "organisation_name", "bundles_created"]),
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+    )
+
+    assert result.to_dict("records") == [
+        {"month": "2026-01", "bundles_created": 0},
+        {"month": "2026-02", "bundles_created": 0},
+    ]
+
+
+def test_build_monthly_question_rating_summary_keeps_questions_separate() -> None:
+    monthly_ratings = pd.DataFrame(
+        [
+            {
+                "month": "2026-05",
+                "organisation_name": "Org A",
+                "target": "groups",
+                "question_label": "Session enjoyment",
+                "avg_rating": 1.0,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "organisation_name": "Org B",
+                "target": "groups",
+                "question_label": "Session enjoyment",
+                "avg_rating": 5.0,
+                "total_responses": 9,
+            },
+            {
+                "month": "2026-05",
+                "organisation_name": "Org A",
+                "target": "groups",
+                "question_label": "Activity engagement",
+                "avg_rating": 3.0,
+                "total_responses": 2,
+            },
+        ]
+    )
+
+    result = merger.build_monthly_question_rating_summary(monthly_ratings)
+
+    assert result.to_dict("records") == [
+        {
+            "month": "2026-05",
+            "target": "groups",
+            "question_label": "Activity engagement",
+            "avg_rating": 3.0,
+        },
+        {
+            "month": "2026-05",
+            "target": "groups",
+            "question_label": "Session enjoyment",
+            "avg_rating": 4.6,
+        },
+    ]
+
+
+def test_build_monthly_question_rating_summary_requires_question_labels() -> None:
+    result = merger.build_monthly_question_rating_summary(
+        _empty(["month", "target", "avg_rating", "total_responses"])
+    )
+
+    assert list(result.columns) == ["month", "target", "question_label", "avg_rating"]
+    assert result.empty
 
 
 # ── build_daily_visit_activity ────────────────────────────────────────────────

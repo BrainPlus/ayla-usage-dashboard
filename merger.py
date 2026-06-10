@@ -46,7 +46,7 @@ def build_user_detail(
     df = df.merge(activity_completions, on="user_id", how="left")
 
     df["logins"] = df["logins"].fillna(0).astype(int)
-    df["last_login_date"] = df["last_login_date"].fillna(_NO_USAGE)
+    df["last_login_date"] = df["last_login_date"].replace("", pd.NA).fillna(_NO_USAGE)
     df["avg_real_session_minutes"] = (
         pd.to_numeric(df["avg_real_session_minutes"], errors="coerce")
         .fillna(0.0)
@@ -404,6 +404,66 @@ def build_monthly_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
         .agg(rating_total=("rating_total", "sum"), total_responses=("total_responses", "sum"))
     )
     summary["avg_rating"] = (summary["rating_total"] / summary["total_responses"]).round(2)
+    return summary[columns]
+
+
+def build_monthly_bundle_creation_summary(
+    monthly_bundle_creations: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    """Aggregate bundle creations across the selected scope and zero-fill months."""
+    columns = ["month", "bundles_created"]
+    months = pd.period_range(start=start_date, end=end_date, freq="M").astype(str)
+    summary = pd.DataFrame({"month": months})
+
+    if monthly_bundle_creations.empty:
+        summary["bundles_created"] = 0
+        return summary[columns]
+
+    creations = monthly_bundle_creations.copy()
+    creations["bundles_created"] = pd.to_numeric(
+        creations["bundles_created"], errors="coerce"
+    ).fillna(0)
+    totals = (
+        creations.groupby("month", as_index=False)["bundles_created"]
+        .sum()
+    )
+    summary = summary.merge(totals, on="month", how="left")
+    summary["bundles_created"] = summary["bundles_created"].fillna(0).astype(int)
+    return summary[columns]
+
+
+def build_monthly_question_rating_summary(monthly_ratings: pd.DataFrame) -> pd.DataFrame:
+    """Build response-weighted monthly ratings for each feedback question."""
+    columns = ["month", "target", "question_label", "avg_rating"]
+    if monthly_ratings.empty or "question_label" not in monthly_ratings.columns:
+        return pd.DataFrame(columns=columns)
+
+    ratings = monthly_ratings.copy()
+    ratings["avg_rating"] = pd.to_numeric(ratings["avg_rating"], errors="coerce")
+    ratings["total_responses"] = pd.to_numeric(
+        ratings["total_responses"], errors="coerce"
+    ).fillna(0)
+    ratings = ratings[
+        ratings["question_label"].notna()
+        & ratings["avg_rating"].notna()
+        & (ratings["total_responses"] > 0)
+    ].copy()
+    if ratings.empty:
+        return pd.DataFrame(columns=columns)
+
+    ratings["rating_total"] = ratings["avg_rating"] * ratings["total_responses"]
+    summary = (
+        ratings.groupby(["month", "target", "question_label"], as_index=False)
+        .agg(
+            rating_total=("rating_total", "sum"),
+            total_responses=("total_responses", "sum"),
+        )
+    )
+    summary["avg_rating"] = (
+        summary["rating_total"] / summary["total_responses"]
+    ).round(2)
     return summary[columns]
 
 

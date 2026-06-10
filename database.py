@@ -133,6 +133,100 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+def get_monthly_bundle_creations(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts bundles created per calendar month and organisation.
+
+    Returns columns: month (str "YYYY-MM"), organisation_name (str),
+    bundles_created (int)
+
+    Uses bundles.created_at as the canonical creation timestamp.
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        SELECT
+            TO_CHAR(DATE_TRUNC('month', b.created_at), 'YYYY-MM') AS month,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            COUNT(b.id) AS bundles_created
+        FROM bundles b
+        JOIN users u ON u.id = b.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        WHERE b.created_at >= :start AND b.created_at < :end_exclusive
+        {filter_sql}
+        GROUP BY month, organisation_name
+        ORDER BY month, organisation_name
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
+def get_bundle_filter_breakdown(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Counts bundle filter preferences within the selected reporting period.
+
+    Returns columns: filter_type (str), filter_value (str), bundle_count (int)
+    Missing JSON values and empty strings are counted as "Not set".
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        WITH scoped_bundles AS (
+            SELECT b.bundle_filters
+            FROM bundles b
+            JOIN users u ON u.id = b.user_id
+            LEFT JOIN organisations o ON o.id = u.organisation_id
+            WHERE b.created_at >= :start AND b.created_at < :end_exclusive
+            {filter_sql}
+        ),
+        filter_values AS (
+            SELECT
+                'severity' AS filter_type,
+                COALESCE(NULLIF(BTRIM(bundle_filters->>'severity'), ''), 'Not set')
+                    AS filter_value
+            FROM scoped_bundles
+            UNION ALL
+            SELECT
+                'age' AS filter_type,
+                COALESCE(NULLIF(BTRIM(bundle_filters->>'age'), ''), 'Not set')
+                    AS filter_value
+            FROM scoped_bundles
+            UNION ALL
+            SELECT
+                'physical_requirement' AS filter_type,
+                COALESCE(
+                    NULLIF(BTRIM(bundle_filters->>'physical_requirement'), ''),
+                    'Not set'
+                ) AS filter_value
+            FROM scoped_bundles
+        )
+        SELECT filter_type, filter_value, COUNT(*) AS bundle_count
+        FROM filter_values
+        GROUP BY filter_type, filter_value
+        ORDER BY filter_type, bundle_count DESC, filter_value
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
+
+
 def get_star_ratings_by_org(
     region: str,
     start_date: date,
@@ -185,13 +279,15 @@ def get_monthly_star_ratings(
     org_id=None,
 ) -> pd.DataFrame:
     """
-    Calculates average star rating per month, organisation, and feedback target.
+    Calculates average star rating per month, organisation, feedback target,
+    and question label.
 
-    Same join as get_star_ratings_by_org, additionally grouped by calendar month.
+    Answers are joined to the English question label by question ID so labels
+    remain correct if question order changes.
 
     Returns columns:
         month (str "YYYY-MM"), organisation_name (str), target (str),
-        avg_rating (float), total_responses (int)
+        question_label (str), avg_rating (float), total_responses (int)
 
     Uses feedback_answers.created_at (confirmed timestamptz column).
     """
@@ -206,6 +302,7 @@ def get_monthly_star_ratings(
             TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
+            question->>'question_en'                         AS question_label,
             AVG((ans->>'answer')::numeric)                   AS avg_rating,
             COUNT(*)                                         AS total_responses
         FROM feedback_answers fa
@@ -213,10 +310,14 @@ def get_monthly_star_ratings(
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        JOIN LATERAL jsonb_array_elements(fq.questions->'questions') AS question
+            ON question->>'id' = ans->>'questionId'
         WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         {filter_sql}
-        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'), fq.target
-        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation')
+        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target, question_label
+        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target, question_label
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn, params=params)

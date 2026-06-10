@@ -1,5 +1,6 @@
 import importlib
 import sys
+from datetime import date
 from types import ModuleType
 
 import pandas as pd
@@ -59,24 +60,33 @@ def test_should_clear_report(monkeypatch) -> None:
     assert app._should_clear_report({"global_summary": {}}, "eu", None, "range")
 
 
-def test_filter_to_org_users(monkeypatch) -> None:
+def test_database_user_ids_are_normalised_for_raw_aggregate_filters(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    db_users = pd.DataFrame([{"user_id": 1}, {"user_id": "u2"}])
+
+    assert app._database_user_ids(db_users) == frozenset({"1", "u2"})
+
+
+def test_filter_to_database_users_produces_distinct_regional_results(monkeypatch) -> None:
     app = _import_app(monkeypatch)
     df = pd.DataFrame([{"user_id": "u1"}, {"user_id": "u2"}])
 
-    result = app._filter_to_org_users(df, {"u2"})
+    eu_result = app._filter_to_database_users(df, frozenset({"u1"}))
+    uk_result = app._filter_to_database_users(df, frozenset({"u2"}))
 
-    assert result.to_dict("records") == [{"user_id": "u2"}]
+    assert eu_result.to_dict("records") == [{"user_id": "u1"}]
+    assert uk_result.to_dict("records") == [{"user_id": "u2"}]
     without_user_ids = pd.DataFrame([{"activity_id": "a1"}])
-    assert app._filter_to_org_users(without_user_ids, {"u2"}).equals(without_user_ids)
+    assert app._filter_to_database_users(
+        without_user_ids, frozenset({"u2"})
+    ).equals(without_user_ids)
 
 
 def test_last_login_user_ids(monkeypatch) -> None:
     app = _import_app(monkeypatch)
     db_users = pd.DataFrame([{"user_id": "u1"}, {"user_id": "u2"}])
-    logins = pd.DataFrame([{"user_id": "u2"}, {"user_id": "u3"}])
 
-    assert app._last_login_user_ids(db_users, logins, 196) == ["u1", "u2"]
-    assert app._last_login_user_ids(db_users, logins, None) == ["u1", "u2", "u3"]
+    assert app._last_login_user_ids(db_users) == ["u1", "u2"]
 
 
 def test_overview_metrics_depend_on_organisation_scope(monkeypatch) -> None:
@@ -104,7 +114,11 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert set(app._SECTION_HELP) == {
         "overview",
         "logins_by_organisation",
+        "monthly_bundle_creations",
+        "bundle_filter_breakdown",
         "monthly_average_star_ratings",
+        "group_feedback_by_question",
+        "therapist_feedback_by_question",
         "activity_usage",
         "daily_visit_activity",
         "by_organisation",
@@ -130,7 +144,174 @@ def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) 
     assert not app._show_user_organisation_filter("unassigned")
 
 
+def test_bundle_creation_charts_show_in_scope_specific_tabs(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_global_bundle_creation_chart(None)
+    assert not app._show_organisation_bundle_creation_chart(None)
+
+    for org_id in (196, "unassigned"):
+        assert not app._show_global_bundle_creation_chart(org_id)
+        assert app._show_organisation_bundle_creation_chart(org_id)
+
+
+def test_monthly_bundle_creation_chart_uses_display_label_and_zero_fills(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    creations = pd.DataFrame(
+        [{"month": "2026-01", "organisation_name": "Org A", "bundles_created": 2}]
+    )
+
+    chart = app._monthly_bundle_creation_chart(
+        creations, date(2026, 1, 1), date(2026, 2, 28)
+    )
+
+    assert chart.to_dict("index") == {
+        "2026-01": {"Bundles created": 2},
+        "2026-02": {"Bundles created": 0},
+    }
+
+
+def test_bundle_filter_chart_selects_category_and_orders_by_count(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    breakdown = pd.DataFrame(
+        [
+            {"filter_type": "severity", "filter_value": "mild", "bundle_count": 4},
+            {"filter_type": "age", "filter_value": "sixties", "bundle_count": 5},
+            {"filter_type": "severity", "filter_value": "Not set", "bundle_count": 2},
+        ]
+    )
+
+    chart = app._bundle_filter_chart(breakdown, "severity")
+
+    assert chart.to_dict("index") == {
+        "mild": {"Bundles": 4},
+        "Not set": {"Bundles": 2},
+    }
+
+
+def test_monthly_bundle_creation_summary_reloads_stale_merger_module(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    stale_merger = ModuleType("merger")
+    fresh_merger = ModuleType("merger")
+    expected = pd.DataFrame([{"month": "2026-05", "bundles_created": 1}])
+    fresh_merger.build_monthly_bundle_creation_summary = (
+        lambda creations, start, end: expected
+    )
+
+    monkeypatch.setattr(app, "merger", stale_merger)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
+
+    result = app._build_monthly_bundle_creation_summary(
+        pd.DataFrame(), date(2026, 5, 1), date(2026, 5, 31)
+    )
+
+    assert result is expected
+    assert app.merger is fresh_merger
+
+
+def test_monthly_bundle_creations_reloads_stale_database_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_database = ModuleType("database")
+    fresh_database = ModuleType("database")
+    expected = pd.DataFrame([{"month": "2026-05", "bundles_created": 1}])
+    fresh_database.get_monthly_bundle_creations = (
+        lambda region, start, end, org_id=None: expected
+    )
+
+    monkeypatch.setattr(app, "database", stale_database)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_database)
+
+    result = app._get_monthly_bundle_creations(
+        "eu", date(2026, 5, 1), date(2026, 5, 31), 196
+    )
+
+    assert result is expected
+    assert app.database is fresh_database
+
+
+def test_bundle_filter_breakdown_reloads_stale_database_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_database = ModuleType("database")
+    fresh_database = ModuleType("database")
+    expected = pd.DataFrame(
+        [{"filter_type": "age", "filter_value": "sixties", "bundle_count": 1}]
+    )
+    fresh_database.get_bundle_filter_breakdown = (
+        lambda region, start, end, org_id=None: expected
+    )
+
+    monkeypatch.setattr(app, "database", stale_database)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_database)
+
+    result = app._get_bundle_filter_breakdown(
+        "eu", date(2026, 5, 1), date(2026, 5, 31), 196
+    )
+
+    assert result is expected
+    assert app.database is fresh_database
+
+
 def test_deployment_revision_is_not_shown_in_sidebar(monkeypatch) -> None:
     app = _import_app(monkeypatch)
 
     assert not any("Deployment revision:" in caption for caption in app.st._captions)
+
+
+def test_monthly_question_chart_separates_target_and_labels_outcome_proxy(
+    monkeypatch,
+) -> None:
+    app = _import_app(monkeypatch)
+    monthly_ratings = pd.DataFrame(
+        [
+            {
+                "month": "2026-05",
+                "target": "groups",
+                "question_label": "How much did you enjoy the session?",
+                "avg_rating": 4.0,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "target": "groups",
+                "question_label": "How do you feel after today's session?",
+                "avg_rating": 4.5,
+                "total_responses": 1,
+            },
+            {
+                "month": "2026-05",
+                "target": "therapists",
+                "question_label": "How much did the group enjoy the session?",
+                "avg_rating": 3.0,
+                "total_responses": 1,
+            },
+        ]
+    )
+
+    chart, colors = app._monthly_question_chart(monthly_ratings, "groups")
+
+    assert list(chart.columns) == [
+        "How do you feel after today's session? (not a clinical outcome)",
+        "How much did you enjoy the session?",
+    ]
+    assert "How much did the group enjoy the session?" not in chart.columns
+    assert colors[0] == "#ff7f0e"
+
+
+def test_monthly_question_summary_reloads_stale_merger_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_merger = ModuleType("merger")
+    fresh_merger = ModuleType("merger")
+    expected = pd.DataFrame([{"month": "2026-05"}])
+    fresh_merger.build_monthly_question_rating_summary = lambda ratings: expected
+
+    monkeypatch.setattr(app, "merger", stale_merger)
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_merger)
+
+    result = app._build_monthly_question_rating_summary(pd.DataFrame())
+
+    assert result is expected
+    assert app.merger is fresh_merger

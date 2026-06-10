@@ -14,7 +14,7 @@ All functions in this module make HTTP GET requests to the Matomo API using cred
 
 **Returns:** `list` of visit dicts (all pages concatenated). Raises `RuntimeError` if any page returns a non-list, preventing API errors or partial results from being reported as empty data.
 
-**Notes:** Replaces the previous single-call approach with pagination. All four bulk `Live.getLastVisitsDetails` functions call this helper. Organisation scoping is applied by the caller outside this module after fetching, using Matomo user IDs belonging to the selected region and organisation in the database. Source-side `dimension13` segmentation is intentionally disabled because a production comparison found 56–78% undercounting.
+**Notes:** Replaces the previous single-call approach with pagination. All bulk `Live.getLastVisitsDetails` functions call this helper. Because Matomo is shared across regions, callers must restrict raw aggregate paths to Matomo user IDs from the selected region's database before aggregation. Organisation scoping uses the same database-user allowlist. Source-side `dimension13` segmentation is intentionally disabled because a production comparison found 56–78% undercounting.
 
 ---
 
