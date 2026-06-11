@@ -213,19 +213,6 @@ def test_delivery_funnel_summary_clamps_negative_dropoff(monkeypatch) -> None:
     assert result.iloc[1:]["Drop-off %"].tolist() == [0.0, 0.0]
 
 
-def test_cached_delivery_funnel_reloads_stale_matomo_module(monkeypatch) -> None:
-    app = _import_app(monkeypatch)
-    stale_matomo = ModuleType("matomo")
-    fresh_matomo = ModuleType("matomo")
-    fresh_matomo.get_delivery_funnel_instances = (
-        lambda date_range, org_id=None: (date_range, org_id)
-    )
-    app.matomo = stale_matomo
-    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_matomo)
-
-    assert app._cached_delivery_funnel("last365", "eu", 196) == ("last365", 196)
-    assert app.matomo is fresh_matomo
-
 
 def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:
     app = _import_app(monkeypatch)

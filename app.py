@@ -1,6 +1,5 @@
 # Streamlit entry point: sidebar region selector, three-tab layout (Global Overview, By Organisation, By User).
 
-import concurrent.futures
 import importlib
 import inspect
 import streamlit as st
@@ -456,6 +455,8 @@ def _should_clear_report(
     current_region: str,
     current_org_id,
     current_date_range: str,
+    current_skip_last_login: bool = False,
+    current_skip_bundle_history: bool = False,
 ) -> bool:
     if not any(
         key in session_state
@@ -465,10 +466,14 @@ def _should_clear_report(
     fetched_region = session_state.get("fetched_region")
     fetched_org_id = session_state.get("fetched_org_id")
     fetched_date_range = session_state.get("fetched_date_range")
+    fetched_skip_last_login = session_state.get("fetched_skip_last_login", False)
+    fetched_skip_bundle_history = session_state.get("fetched_skip_bundle_history", False)
     return (
         fetched_region != current_region
         or fetched_org_id != current_org_id
         or fetched_date_range != current_date_range
+        or fetched_skip_last_login != current_skip_last_login
+        or fetched_skip_bundle_history != current_skip_bundle_history
     )
 
 
@@ -536,16 +541,6 @@ def _cached_live_visits(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_delivery_funnel(date_range: str, region: str, org_id):
-    return _get_delivery_funnel_instances(date_range, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_activity_completions(date_range: str, region: str, org_id):
-    return matomo.get_activity_completions_per_user(date_range, org_id=org_id)
-
-
-@st.cache_data(ttl=3600)
 def _cached_activity_catalogue() -> dict:
     import squidex
     settings = squidex.get_settings_from_secrets(st.secrets)
@@ -557,66 +552,6 @@ def _cached_activity_catalogue() -> dict:
         return squidex.get_activity_catalogue(base_url, project, token)
     except Exception:
         return {}
-
-
-@st.cache_data(ttl=3600)
-def _cached_activity_usage(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return _get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_step_completion_depth(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_step_completion_depth(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_visit_durations(date_range: str, region: str, org_id):
-    return matomo.get_visit_durations(date_range, org_id=org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_visit_dates(date_range: str, region: str, org_id):
-    return matomo.get_visit_dates(date_range, org_id=org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_talking_point_engagement(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_talking_point_engagement(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_media_usage(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_media_usage(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_engagement_events(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -682,6 +617,8 @@ if _should_clear_report(
     region,
     selected_org_id,
     date_range,
+    skip_last_login,
+    skip_bundle_history,
 ):
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)

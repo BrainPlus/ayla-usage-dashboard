@@ -317,7 +317,17 @@ def get_visit_dates(
         DataFrame with columns: user_id (str), visit_date (str "YYYY-MM-DD")
     """
     columns = ["user_id", "visit_date"]
-    data = _live_visits(date_range, visits)
+    if visits is not None:
+        data = visits
+    else:
+        data = _fetch_all_live_visits(
+            {
+                "method": "Live.getLastVisitsDetails",
+                "period": "range",
+                "date": date_range,
+                "doNotFetchActions": 1,
+            }
+        )
 
     if not data:
         return pd.DataFrame(columns=columns)
