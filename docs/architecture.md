@@ -43,7 +43,7 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 1. **DB queries** — `database.py` runs the PostgreSQL queries sequentially to stay within the production database's limited connection slots.
 
-2. **Matomo bulk queries** (medium, cached 1h) — `matomo.py` fetches the full action-level Live visit payload once for the selected reporting period and, when required for bundle progression, once for bundle history. All selected-period metrics derive from the shared payload rather than downloading the same visits independently. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
+2. **Matomo bulk queries** (medium) — `matomo.py` fetches the full action-level Live visit payload once per pull for the selected reporting period, and all selected-period metrics derive from that shared in-memory payload rather than downloading the same visits independently. The raw payload is intentionally not stored in Streamlit's cache because cache serialization can multiply its memory footprint. Bundle history is reduced page-by-page into delivery-funnel rows so the full history payload is never retained at once. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
 
 3. **Last login per user** (slow, ~30–60 s for 100 users) — one `Live.getLastVisitsDetails` call per user, parallelised with up to 10 concurrent workers. Progress is collected via `as_completed` on the calling thread so Streamlit UI updates stay on the main thread. Not cached because caching would skip the progress callback.
 

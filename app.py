@@ -533,14 +533,6 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_live_visits(date_range: str):
-    global matomo
-    if not hasattr(matomo, "get_live_visits"):
-        matomo = importlib.reload(matomo)
-    return matomo.get_live_visits(date_range)
-
-
-@st.cache_data(ttl=3600)
 def _cached_activity_catalogue() -> dict:
     import squidex
     settings = squidex.get_settings_from_secrets(st.secrets)
@@ -677,36 +669,12 @@ if pull:
             database_user_ids = _database_user_ids(db_users)
         _update_pull_progress(0.12, "Database queries complete")
 
-        # Step 2 — Matomo queries (cached after first run)
+        # Step 2 — Matomo queries
         with st.spinner("Fetching Matomo analytics...", show_time=True):
             _update_pull_progress(0.15, "Fetching login totals")
             logins = _cached_logins(date_range)
-            _update_pull_progress(0.20, "Fetching selected-period Matomo visits")
-            live_visits = _cached_live_visits(date_range)
             if skip_bundle_history:
-                _update_pull_progress(0.62, "Bundle history skipped")
-                bundle_history_visits = []
-            else:
-                _update_pull_progress(
-                    0.42, "Fetching bundle history (usually the longest stage)"
-                )
-                bundle_history_visits = (
-                    live_visits
-                    if bundle_history_date_range == date_range
-                    else _cached_live_visits(bundle_history_date_range)
-                )
-            _update_pull_progress(0.62, "Calculating Matomo metrics")
-            delivery_funnel = matomo.get_delivery_funnel_instances(
-                date_range, org_id=selected_org_id, visits=live_visits
-            )
-            bundle_history_funnel = (
-                matomo.get_delivery_funnel_instances(
-                    bundle_history_date_range,
-                    org_id=selected_org_id,
-                    visits=bundle_history_visits,
-                )
-                if not skip_bundle_history
-                else pd.DataFrame(
+                bundle_history_funnel = pd.DataFrame(
                     columns=[
                         "visit_id",
                         "bundle_id",
@@ -716,7 +684,27 @@ if pull:
                         "completed_session_date",
                     ]
                 )
+            elif bundle_history_date_range != date_range:
+                _update_pull_progress(
+                    0.25, "Fetching bundle history (usually the longest stage)"
+                )
+                bundle_history_funnel = matomo.get_delivery_funnel_instances_streamed(
+                    bundle_history_date_range,
+                    org_id=selected_org_id,
+                )
+            else:
+                bundle_history_funnel = None
+
+            _update_pull_progress(0.50, "Fetching selected-period Matomo visits")
+            # Keep one live copy for this pull. Caching this action-level payload causes
+            # Streamlit to retain serialized copies and can exceed Cloud worker memory.
+            live_visits = matomo.get_live_visits(date_range)
+            _update_pull_progress(0.62, "Calculating Matomo metrics")
+            delivery_funnel = matomo.get_delivery_funnel_instances(
+                date_range, org_id=selected_org_id, visits=live_visits
             )
+            if bundle_history_funnel is None:
+                bundle_history_funnel = delivery_funnel
             completed_sessions = delivery_funnel.loc[
                 delivery_funnel["completed_session"],
                 ["visit_id", "bundle_id", "session_id", "user_id"],

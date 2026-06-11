@@ -75,9 +75,8 @@ def matomo_get(params: dict, expect_csv: bool = False):
     return response.json()
 
 
-def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_SIZE) -> list:
-    """Paginate Live.getLastVisitsDetails until all visits in the date range are fetched."""
-    all_visits: list = []
+def _iter_live_visit_pages(base_params: dict, page_size: int = LIVE_VISIT_PAGE_SIZE):
+    """Yield bounded Live.getLastVisitsDetails pages without retaining prior pages."""
     offset = 0
     while True:
         data = matomo_get({**base_params, "filter_limit": page_size, "filter_offset": offset})
@@ -88,10 +87,17 @@ def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_S
             )
         if not data:
             break  # empty page → all pages consumed
-        all_visits.extend(data)
+        yield data
         if len(data) < page_size:
             break  # partial page → last page
         offset += len(data)
+
+
+def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_SIZE) -> list:
+    """Paginate Live.getLastVisitsDetails until all visits in the date range are fetched."""
+    all_visits: list = []
+    for page in _iter_live_visit_pages(base_params, page_size):
+        all_visits.extend(page)
     return all_visits
 
 
@@ -297,6 +303,25 @@ def get_delivery_funnel_instances(
     if not data:
         return pd.DataFrame(columns=columns)
     return _delivery_session_instances_from_visits(data)
+
+
+def get_delivery_funnel_instances_streamed(date_range: str, org_id=None) -> pd.DataFrame:
+    """Build delivery funnel instances page-by-page for memory-heavy history ranges."""
+    pages = _iter_live_visit_pages(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+    frames = []
+    for page in pages:
+        frame = _delivery_session_instances_from_visits(page)
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return _delivery_session_instances_from_visits([])
+    return pd.concat(frames, ignore_index=True)
 
 
 def get_visit_dates(

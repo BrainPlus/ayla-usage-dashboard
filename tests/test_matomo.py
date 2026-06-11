@@ -43,6 +43,41 @@ def test_selected_period_metrics_reuse_supplied_live_visits(monkeypatch) -> None
     matomo.get_engagement_events("last90", visits=visits)
 
 
+def test_streamed_delivery_funnel_processes_bounded_pages_without_fetch_all(
+    monkeypatch,
+) -> None:
+    def completion(visit_id: str) -> dict:
+        return {
+            "idVisit": visit_id,
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventAction": "Session Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        matomo,
+        "_iter_live_visit_pages",
+        lambda *args, **kwargs: iter([[completion("v1")], [completion("v2")]]),
+    )
+    monkeypatch.setattr(
+        matomo,
+        "_fetch_all_live_visits",
+        lambda *args, **kwargs: pytest.fail("streamed history must not fetch all visits"),
+    )
+
+    result = matomo.get_delivery_funnel_instances_streamed("last365")
+
+    assert list(result["visit_id"]) == ["v1", "v2"]
+    assert result["completed_session"].tolist() == [True, True]
+
+
 def test_matomo_get_retries_transient_timeout(monkeypatch) -> None:
     response = type(
         "Response",
