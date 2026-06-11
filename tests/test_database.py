@@ -21,9 +21,11 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ]
@@ -33,9 +35,11 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ]
@@ -45,9 +49,11 @@ class _Engine:
             "load_users_and_orgs",
             "get_org_user_counts",
             "get_bundle_counts_per_org",
+            "get_bundle_configurations",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
+            "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
     ],
@@ -77,6 +83,7 @@ def test_database_queries_apply_organisation_filter(
         "get_monthly_bundle_creations",
         "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
+        "get_feedback_submissions",
         "get_monthly_star_ratings",
     ):
         getattr(database, function_name)(
@@ -89,6 +96,7 @@ def test_database_queries_apply_organisation_filter(
         "get_monthly_bundle_creations",
         "get_bundle_filter_breakdown",
         "get_star_ratings_by_org",
+        "get_feedback_submissions",
         "get_monthly_star_ratings",
     ):
         assert captured["params"] == {
@@ -115,7 +123,9 @@ def test_database_queries_apply_organisation_filter(
         assert expected_filter in captured["sql"]
 
 
-def test_get_organisations_orders_by_name(monkeypatch) -> None:
+def test_get_organisations_only_returns_organisations_with_regional_users(
+    monkeypatch,
+) -> None:
     captured = {}
 
     def fake_read_sql(sql, conn):
@@ -129,9 +139,12 @@ def test_get_organisations_orders_by_name(monkeypatch) -> None:
 
     result = database.get_organisations("eu")
 
-    assert "id   AS organisation_id" in captured["sql"]
-    assert "name AS organisation_name" in captured["sql"]
-    assert "ORDER BY name" in captured["sql"]
+    assert "o.id   AS organisation_id" in captured["sql"]
+    assert "o.name AS organisation_name" in captured["sql"]
+    assert "FROM organisations o" in captured["sql"]
+    assert "FROM users u" in captured["sql"]
+    assert "u.organisation_id = o.id" in captured["sql"]
+    assert "ORDER BY o.name" in captured["sql"]
     assert result.iloc[0]["organisation_id"] == 196
 
 
@@ -151,6 +164,30 @@ def test_get_bundle_counts_groups_and_orders_by_displayed_organisation_name(
 
     assert "GROUP BY organisation_name" in captured["sql"]
     assert "ORDER BY organisation_name" in captured["sql"]
+
+
+def test_get_bundle_configurations_reads_ordered_session_ids_without_select_star(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_bundle_configurations("eu")
+
+    assert "b.id::text AS bundle_id" in captured["sql"]
+    assert "(b.configuration->'sessions')::jsonb" in captured["sql"]
+    assert "jsonb_array_elements" in captured["sql"]
+    assert "'[]'::jsonb" in captured["sql"]
+    assert "configured_session->>'id'" in captured["sql"]
+    assert "WITH ORDINALITY" in captured["sql"]
+    assert "b.created_at::date AS created_date" in captured["sql"]
+    assert "SELECT * FROM bundles" not in captured["sql"]
 
 
 def test_monthly_bundle_creations_use_canonical_database_timestamp(monkeypatch) -> None:
@@ -215,3 +252,31 @@ def test_monthly_ratings_join_answers_to_readable_question_labels(monkeypatch) -
     assert "AS question_label" in captured["sql"]
     assert "question->>'id' = ans->>'questionId'" in captured["sql"]
     assert "question_label" in captured["sql"]
+
+
+def test_feedback_submissions_extract_pairs_comments_and_reporting_period(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        captured["params"] = params
+        return pd.DataFrame()
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_feedback_submissions(
+        "eu", date(2026, 1, 1), date(2026, 1, 31)
+    )
+
+    assert "fa.answers->'metadata'->>'bundleId' AS bundle_id" in captured["sql"]
+    assert "fa.answers->'metadata'->>'sessionId' AS session_id" in captured["sql"]
+    assert "NULLIF(BTRIM(fa.answers->>'comment'), '') IS NOT NULL AS has_comment" in captured["sql"]
+    assert "fa.created_at >= :start" in captured["sql"]
+    assert "fa.created_at < :end_exclusive" in captured["sql"]
+    assert captured["params"] == {
+        "start": date(2026, 1, 1),
+        "end_exclusive": date(2026, 2, 1),
+    }

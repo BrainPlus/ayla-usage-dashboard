@@ -37,13 +37,18 @@ def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | Non
 
 
 def get_organisations(region: str) -> pd.DataFrame:
-    """Returns all organisations ordered by name."""
+    """Returns organisations with users in the selected region, ordered by name."""
     sql = text("""
         SELECT
-            id   AS organisation_id,
-            name AS organisation_name
-        FROM organisations
-        ORDER BY name
+            o.id   AS organisation_id,
+            o.name AS organisation_name
+        FROM organisations o
+        WHERE EXISTS (
+            SELECT 1
+            FROM users u
+            WHERE u.organisation_id = o.id
+        )
+        ORDER BY o.name
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
@@ -131,6 +136,42 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
         df = pd.read_sql(sql, conn, params=params)
 
     return df
+
+
+def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
+    """
+    Loads each bundle's ordered configured session IDs and creation date.
+
+    Returns columns: bundle_id, bundle_name, organisation_name,
+    configured_session_ids, created_date.
+    """
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
+        SELECT
+            b.id::text AS bundle_id,
+            COALESCE(
+                NULLIF(BTRIM(b.name), ''),
+                NULLIF(BTRIM(b.configuration->>'title'), ''),
+                'Bundle ' || b.id::text
+            ) AS bundle_name,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            ARRAY(
+                SELECT configured_session->>'id'
+                FROM jsonb_array_elements(
+                    COALESCE((b.configuration->'sessions')::jsonb, '[]'::jsonb)
+                ) WITH ORDINALITY AS configured(configured_session, session_order)
+                WHERE configured_session->>'id' IS NOT NULL
+                ORDER BY session_order
+            ) AS configured_session_ids,
+            b.created_at::date AS created_date
+        FROM bundles b
+        JOIN users u ON u.id = b.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        {filter_sql}
+        ORDER BY organisation_name, bundle_name, b.id
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
 
 
 def get_monthly_bundle_creations(
@@ -270,6 +311,43 @@ def get_star_ratings_by_org(
         df = pd.read_sql(sql, conn, params=params)
 
     return df
+
+
+def get_feedback_submissions(
+    region: str,
+    start_date: date,
+    end_date: date,
+    org_id=None,
+) -> pd.DataFrame:
+    """
+    Loads feedback submissions in the selected reporting period.
+
+    Returns one row per feedback submission with columns:
+        organisation_name, target, bundle_id, session_id, has_comment
+    """
+    filter_sql, org_params = _organisation_filter(org_id, prefix="AND")
+    params = {
+        "start": start_date,
+        "end_exclusive": end_date + timedelta(days=1),
+        **(org_params or {}),
+    }
+    sql = text(f"""
+        SELECT
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            fq.target,
+            fa.answers->'metadata'->>'bundleId' AS bundle_id,
+            fa.answers->'metadata'->>'sessionId' AS session_id,
+            NULLIF(BTRIM(fa.answers->>'comment'), '') IS NOT NULL AS has_comment
+        FROM feedback_answers fa
+        JOIN users u ON u.id = fa.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
+        WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
+        {filter_sql}
+        ORDER BY organisation_name, fq.target
+    """)
+    with get_engine(region).connect() as conn:
+        return pd.read_sql(sql, conn, params=params)
 
 
 def get_monthly_star_ratings(

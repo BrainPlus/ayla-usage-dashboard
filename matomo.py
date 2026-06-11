@@ -6,6 +6,7 @@
 # Do not apply dimension13 as a source-side Matomo segment.
 
 import io
+import time
 from datetime import date, timedelta
 
 import pandas as pd
@@ -13,6 +14,22 @@ import requests
 import streamlit as st
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+MATOMO_REQUEST_TIMEOUT = (10, 120)
+MATOMO_REQUEST_ATTEMPTS = 3
+LIVE_VISIT_PAGE_SIZE = 500
+_DELIVER_SELECTED_EVENT = "Prepare/Deliver dialog - Deliver Click"
+_ACTIVE_DELIVERY_EVENTS = frozenset(
+    {
+        "Step Complete",
+        "Activity Complete",
+        "Reality Orientation Date Set",
+        "Reality Orientation Time Set",
+        "Reality Orientation Song Set",
+        "Reality Orientation Group Name Set",
+        "Reality Orientation YouTube Playlist Changed",
+        "Main Activity Card Start Click",
+    }
+)
 
 # Keep org_id on bulk-query signatures for caller/cache compatibility. Do not
 # send dimension13 as a source segment: production checks found 56-78% undercounting.
@@ -34,7 +51,22 @@ def matomo_get(params: dict, expect_csv: bool = False):
     else:
         merged.setdefault("format", "JSON")
 
-    response = requests.get(st.secrets["matomo_url"], params=merged, timeout=60)
+    method = merged.get("method", "unknown method")
+    for attempt in range(1, MATOMO_REQUEST_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                st.secrets["matomo_url"],
+                params=merged,
+                timeout=MATOMO_REQUEST_TIMEOUT,
+            )
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            if attempt == MATOMO_REQUEST_ATTEMPTS:
+                raise type(exc)(
+                    f"Matomo {method} failed after {MATOMO_REQUEST_ATTEMPTS} attempts: {exc}"
+                ) from exc
+            time.sleep(2 ** (attempt - 1))
+
     response.raise_for_status()
 
     if expect_csv:
@@ -42,7 +74,7 @@ def matomo_get(params: dict, expect_csv: bool = False):
     return response.json()
 
 
-def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
+def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_SIZE) -> list:
     """Paginate Live.getLastVisitsDetails until all visits in the date range are fetched."""
     all_visits: list = []
     offset = 0
@@ -92,6 +124,46 @@ def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     df["visits"] = pd.to_numeric(df["visits"], errors="coerce").fillna(0).astype(int)
 
     return df[["user_id", "visits"]].reset_index(drop=True)
+
+
+def get_login_form_outcomes(
+    date_range: str,
+    allowed_user_ids: frozenset[str],
+) -> dict[str, int]:
+    """
+    Count login form attempts, successes, and failures in a date range.
+
+    Attempts and failures happen before authentication, so they cannot be
+    reliably filtered by region. Successes are restricted to identified users
+    in the selected region.
+    """
+    outcomes = {"attempts": 0, "successes": 0, "failures": 0}
+    event_keys = {
+        "Submit Login Form": "attempts",
+        "Submit Login Form Success": "successes",
+        "Submit Login Form Failure": "failures",
+    }
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        for action in visit.get("actionDetails", []):
+            if action.get("type") != "event":
+                continue
+            outcome = event_keys.get(action.get("eventAction"))
+            if outcome is None:
+                continue
+            if outcome == "successes" and user_id not in allowed_user_ids:
+                continue
+            outcomes[outcome] += 1
+
+    return outcomes
 
 
 def get_last_login_per_user(
@@ -222,33 +294,41 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
     if not data:
         return pd.DataFrame(columns=columns)
 
-    records = []
-    for visit_index, visit in enumerate(data):
-        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
-        user_id = str(visit.get("userId", ""))
-        seen = set()
-        for action in visit.get("actionDetails", []):
-            if (
-                _extract_dimension(action, "10") != "false"
-                or action.get("type") != "event"
-                or action.get("eventAction") != "Session Complete"
-            ):
-                continue
-            b = _extract_dimension(action, "14")
-            s = _extract_dimension(action, "5")
-            key = (visit_id, b, s)
-            if b and s and key not in seen:
-                seen.add(key)
-                records.append(
-                    {
-                        "visit_id": visit_id,
-                        "bundle_id": b,
-                        "session_id": s,
-                        "user_id": user_id,
-                    }
-                )
+    instances = _delivery_session_instances_from_visits(data)
+    return instances.loc[
+        instances["completed_session"], columns
+    ].reset_index(drop=True)
 
-    return pd.DataFrame(records, columns=columns)
+
+def get_delivery_funnel_instances(date_range: str, org_id=None) -> pd.DataFrame:
+    """
+    Fetch delivery funnel signals deduplicated per CST session instance.
+
+    Active Delivery requires both a Deliver Selected event and at least one
+    high-confidence event from the #28 allowlist for the same
+    (visit_id, bundle_id, session_id). Completed Session uses the same
+    deliver-mode Session Complete definition as get_completed_sessions.
+    """
+    columns = [
+        "visit_id",
+        "bundle_id",
+        "session_id",
+        "user_id",
+        "deliver_selected",
+        "active_delivery",
+        "completed_session",
+        "completed_session_date",
+    ]
+    data = _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        }
+    )
+    if not data:
+        return pd.DataFrame(columns=columns)
+    return _delivery_session_instances_from_visits(data)
 
 
 def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
@@ -363,7 +443,7 @@ def get_activity_usage_by_id(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -445,7 +525,7 @@ def get_step_completion_depth(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -536,7 +616,7 @@ def get_talking_point_engagement(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -629,7 +709,7 @@ def get_media_usage(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -722,7 +802,7 @@ def get_engagement_events(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -784,6 +864,91 @@ def get_engagement_events(
 
 
 # --- helpers ---
+
+
+def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
+    columns = [
+        "visit_id",
+        "bundle_id",
+        "session_id",
+        "user_id",
+        "deliver_selected",
+        "active_delivery",
+        "completed_session",
+        "completed_session_date",
+    ]
+    instances: dict[tuple[str, str, str], dict] = {}
+
+    for visit_index, visit in enumerate(visits):
+        visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
+        user_id = str(visit.get("userId", ""))
+        for action in visit.get("actionDetails", []):
+            if (
+                action.get("type") != "event"
+                or _extract_dimension(action, "10") != "false"
+            ):
+                continue
+            bundle_id = _extract_dimension(action, "14")
+            session_id = _extract_dimension(action, "5")
+            if not bundle_id or not session_id:
+                continue
+
+            event_action = action.get("eventAction", "")
+            if (
+                event_action != _DELIVER_SELECTED_EVENT
+                and event_action not in _ACTIVE_DELIVERY_EVENTS
+                and event_action != "Session Complete"
+            ):
+                continue
+
+            key = (visit_id, bundle_id, session_id)
+            instance = instances.setdefault(
+                key,
+                {
+                    "visit_id": visit_id,
+                    "bundle_id": bundle_id,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "deliver_selected": False,
+                    "has_active_signal": False,
+                    "completed_session": False,
+                    "completed_session_date": "",
+                },
+            )
+            if event_action == _DELIVER_SELECTED_EVENT:
+                instance["deliver_selected"] = True
+            elif event_action in _ACTIVE_DELIVERY_EVENTS:
+                instance["has_active_signal"] = True
+            elif event_action == "Session Complete":
+                instance["completed_session"] = True
+                completion_date = _event_date(action, visit)
+                instance["completed_session_date"] = max(
+                    instance["completed_session_date"], completion_date
+                )
+
+    records = []
+    for instance in instances.values():
+        instance["active_delivery"] = (
+            instance["deliver_selected"] and instance.pop("has_active_signal")
+        )
+        records.append(instance)
+    return pd.DataFrame(records, columns=columns)
+
+
+def _event_date(action: dict, visit: dict) -> str:
+    """Return an event's YYYY-MM-DD date, falling back to its visit date."""
+    timestamp = pd.to_datetime(action.get("timestamp"), unit="s", utc=True, errors="coerce")
+    if pd.notna(timestamp):
+        return timestamp.date().isoformat()
+
+    raw = (
+        action.get("serverDate")
+        or action.get("serverDateTime")
+        or visit.get("lastActionDateTime")
+        or visit.get("serverDate")
+        or ""
+    )
+    return str(raw)[:10]
 
 
 def _extract_dimension(obj: dict, dim_number: str) -> str:

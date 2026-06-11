@@ -3,6 +3,7 @@ from types import ModuleType
 
 import pandas as pd
 import pytest
+import requests
 
 streamlit_stub = ModuleType("streamlit")
 streamlit_stub.secrets = {}
@@ -11,11 +12,87 @@ sys.modules.setdefault("streamlit", streamlit_stub)
 import matomo
 
 
+def test_full_action_live_visit_page_size_is_bounded() -> None:
+    assert matomo.LIVE_VISIT_PAGE_SIZE <= 500
+
+
+def test_matomo_get_retries_transient_timeout(monkeypatch) -> None:
+    response = type(
+        "Response",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: [{"ok": True}],
+        },
+    )()
+    calls = []
+    sleeps = []
+
+    def fake_get(url, params, timeout):
+        calls.append((url, params, timeout))
+        if len(calls) == 1:
+            raise requests.exceptions.ReadTimeout("slow response")
+        return response
+
+    matomo.st.secrets = {
+        "matomo_url": "https://example.test",
+        "matomo_site_id": "4",
+        "matomo_token": "secret",
+    }
+    monkeypatch.setattr(matomo.requests, "get", fake_get)
+    monkeypatch.setattr(matomo.time, "sleep", sleeps.append)
+
+    result = matomo.matomo_get({"method": "Example.get"})
+
+    assert result == [{"ok": True}]
+    assert len(calls) == 2
+    assert calls[0][2] == (10, 120)
+    assert sleeps == [1]
+
+
+def test_matomo_get_identifies_method_after_transient_retries(monkeypatch) -> None:
+    matomo.st.secrets = {
+        "matomo_url": "https://example.test",
+        "matomo_site_id": "4",
+        "matomo_token": "secret",
+    }
+    monkeypatch.setattr(
+        matomo.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.exceptions.ReadTimeout("slow response")
+        ),
+    )
+    monkeypatch.setattr(matomo.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(
+        requests.exceptions.ReadTimeout,
+        match=r"Matomo Example\.get failed after 3 attempts",
+    ):
+        matomo.matomo_get({"method": "Example.get"})
+
+
+def test_active_delivery_allowlist_matches_issue_28() -> None:
+    assert matomo._ACTIVE_DELIVERY_EVENTS == frozenset(
+        {
+            "Step Complete",
+            "Activity Complete",
+            "Reality Orientation Date Set",
+            "Reality Orientation Time Set",
+            "Reality Orientation Song Set",
+            "Reality Orientation Group Name Set",
+            "Reality Orientation YouTube Playlist Changed",
+            "Main Activity Card Start Click",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "function_name",
     [
         "get_visit_durations",
         "get_completed_sessions",
+        "get_delivery_funnel_instances",
         "get_activity_completions_per_user",
         "get_activity_usage_by_id",
         "get_step_completion_depth",
@@ -117,6 +194,198 @@ def test_get_completed_sessions_counts_deliver_mode_session_complete_per_visit(
         columns=["visit_id", "bundle_id", "session_id", "user_id"],
     )
     pd.testing.assert_frame_equal(result, expected)
+
+
+def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_key(
+    monkeypatch,
+) -> None:
+    def event(action, bundle="b1", session="s1", mode="false"):
+        return {
+            "type": "event",
+            "eventAction": action,
+            "dimension10": mode,
+            "dimension14": bundle,
+            "dimension5": session,
+        }
+
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Talking Point Expand Click"),
+                event("Reality Orientation Date Set"),
+                event("Session Complete"),
+                event("Session Complete"),
+                event("Activity Complete", session="s2"),
+                event("Main Activity Card Start Click", session="s3", mode="true"),
+                event("Drawer Open", session="s4"),
+            ],
+        },
+        {
+            "idVisit": "v2",
+            "userId": "u1",
+            "actionDetails": [
+                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Step Complete"),
+            ],
+        },
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    result = matomo.get_delivery_funnel_instances("2026-01-01,2026-01-31")
+
+    assert result.to_dict("records") == [
+        {
+            "visit_id": "v1",
+            "bundle_id": "b1",
+            "session_id": "s1",
+            "user_id": "u1",
+            "deliver_selected": True,
+            "active_delivery": True,
+            "completed_session": True,
+            "completed_session_date": "",
+        },
+        {
+            "visit_id": "v1",
+            "bundle_id": "b1",
+            "session_id": "s2",
+            "user_id": "u1",
+            "deliver_selected": False,
+            "active_delivery": False,
+            "completed_session": False,
+            "completed_session_date": "",
+        },
+        {
+            "visit_id": "v2",
+            "bundle_id": "b1",
+            "session_id": "s1",
+            "user_id": "u1",
+            "deliver_selected": True,
+            "active_delivery": True,
+            "completed_session": False,
+            "completed_session_date": "",
+        },
+    ]
+
+
+def test_delivery_funnel_uses_latest_deduplicated_completion_event_date(
+    monkeypatch,
+) -> None:
+    def completion(timestamp: int, mode: str = "false") -> dict:
+        return {
+            "type": "event",
+            "eventAction": "Session Complete",
+            "dimension10": mode,
+            "dimension14": "b1",
+            "dimension5": "s1",
+            "timestamp": timestamp,
+        }
+
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                completion(1767225600),
+                completion(1767312000),
+                completion(1767398400, mode="true"),
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    result = matomo.get_delivery_funnel_instances("last365")
+
+    assert len(result) == 1
+    assert result.iloc[0]["completed_session_date"] == "2026-01-02"
+
+
+def test_delivery_funnel_completed_stage_matches_completed_sessions(monkeypatch) -> None:
+    visits = [
+        {
+            "idVisit": "v1",
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventAction": "Session Complete",
+                    "dimension10": "false",
+                    "dimension14": "b1",
+                    "dimension5": "s1",
+                }
+            ],
+        }
+    ]
+    monkeypatch.setattr(
+        matomo, "_fetch_all_live_visits", lambda params, page_size=5000: visits
+    )
+
+    completed = matomo.get_completed_sessions("2026-01-01,2026-01-31")
+    funnel = matomo.get_delivery_funnel_instances("2026-01-01,2026-01-31")
+    funnel_completed = funnel.loc[
+        funnel["completed_session"],
+        ["visit_id", "bundle_id", "session_id", "user_id"],
+    ].reset_index(drop=True)
+
+    pd.testing.assert_frame_equal(funnel_completed, completed)
+
+
+def test_get_login_form_outcomes_filters_only_successes_to_region_users(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "userId": "eu-user",
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Success"},
+            ],
+        },
+        {
+            "userId": "uk-user",
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Success"},
+            ],
+        },
+        {
+            "actionDetails": [
+                {"type": "event", "eventAction": "Submit Login Form"},
+                {"type": "event", "eventAction": "Submit Login Form Failure"},
+                {"type": "event", "eventAction": "Unrelated Event"},
+            ],
+        },
+    ]
+    monkeypatch.setattr(matomo, "matomo_get", lambda params: visits)
+
+    result = matomo.get_login_form_outcomes(
+        "2026-01-01,2026-01-31", frozenset({"eu-user"})
+    )
+
+    assert result == {"attempts": 3, "successes": 1, "failures": 1}
+
+
+def test_get_login_form_outcomes_does_not_apply_deliver_mode_segment(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_fetch(params, page_size=5000):
+        captured["params"] = params
+        return []
+
+    monkeypatch.setattr(matomo, "_fetch_all_live_visits", fake_fetch)
+
+    matomo.get_login_form_outcomes("2026-01-01,2026-01-31", frozenset())
+
+    assert "segment" not in captured["params"]
 
 
 def test_get_completed_sessions_raises_for_non_list_response(monkeypatch) -> None:
@@ -404,6 +673,20 @@ def test_fetch_single_page_less_than_page_size(monkeypatch) -> None:
     result = matomo._fetch_all_live_visits({"method": "Live.getLastVisitsDetails"}, page_size=5)
     assert len(result) == 3
     assert result[0]["userId"] == "u0"
+
+
+def test_fetch_all_live_visits_uses_bounded_default_page_size(monkeypatch) -> None:
+    captured = {}
+
+    def fake_get(params: dict) -> list:
+        captured.update(params)
+        return []
+
+    monkeypatch.setattr(matomo, "matomo_get", fake_get)
+
+    matomo._fetch_all_live_visits({"method": "Live.getLastVisitsDetails"})
+
+    assert captured["filter_limit"] == matomo.LIVE_VISIT_PAGE_SIZE
 
 
 def test_fetch_multiple_pages_concatenated(monkeypatch) -> None:

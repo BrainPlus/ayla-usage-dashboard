@@ -45,6 +45,52 @@ def build_methodology_df(
             "visits are counted separately; prepare-mode events are excluded.",
         ),
         (
+            "Feedback coverage",
+            "Unique bundleId + sessionId pairs with group or therapist feedback divided "
+            "by unique completed bundleId + sessionId pairs in the selected reporting "
+            "period. Organisations without completed sessions show No sessions.",
+        ),
+        (
+            "Therapist comment rate",
+            "Therapist feedback submissions with a non-empty comment divided by all "
+            "therapist feedback submissions in the selected reporting period.",
+        ),
+        (
+            "Days since last completed session",
+            "Calendar days since the organisation's most recent deliver-mode Session "
+            "Complete event across bundle history. Organisations without one show "
+            "No recent session.",
+        ),
+        (
+            "Bundle progression",
+            "Unique configured CST sessions completed across the bundle's full "
+            "history, divided by the bundle's actual configured session count. "
+            "Completion events use the deduplicated Completed Sessions definition.",
+        ),
+        (
+            "Bundle stalled status",
+            "An incomplete bundle with at least one completion is flagged after "
+            "30 days without a newly completed configured session, with a separate "
+            "60+ day status.",
+        ),
+        (
+            "Session cadence",
+            "Average calendar days between the first completion dates of unique "
+            "configured sessions in a bundle.",
+        ),
+        (
+            "Delivery funnel",
+            "Deliver Selected, Active Delivery, and Completed Session counts are each "
+            "deduplicated by (Matomo visitId + bundleId + sessionId). Active Delivery "
+            "requires a Deliver Selected event and at least one high-confidence "
+            "deliver-mode activity signal.",
+        ),
+        (
+            "Delivery funnel drop-off",
+            "Absolute difference and percentage decrease from each funnel stage to "
+            "the next. Percentage uses the previous stage as the denominator.",
+        ),
+        (
             "Avg activities per session",
             "Total Activity Complete events divided by completed sessions in the selected period. "
             "Note: fires on forward navigation — rapid click-through may inflate this count.",
@@ -99,16 +145,18 @@ def build_excel_report(
     date_range: str,
     activity_usage_table: pd.DataFrame | None = None,
     org_filter_name=None,
+    bundle_progression: pd.DataFrame | None = None,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
 
     Sheets (in order):
         1. Organisation Summary
-        2. User Detail
-        3. Monthly Ratings
-        4. Activity Usage
-        5. Methodology
+        2. Bundle Progression
+        3. User Detail
+        4. Monthly Ratings
+        5. Activity Usage
+        6. Methodology
 
     All columns are auto-sized up to a maximum width of 50 characters.
 
@@ -119,17 +167,21 @@ def build_excel_report(
         region:                "uk" or "eu"
         date_range:            "YYYY-MM-DD,YYYY-MM-DD" for the reporting period
         activity_usage_table:  output of merger.build_activity_usage_table (optional)
+        bundle_progression:     output of merger.build_bundle_progression (optional)
 
     Returns:
         bytes of the .xlsx file
     """
     if activity_usage_table is None:
         activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
+    if bundle_progression is None:
+        bundle_progression = pd.DataFrame()
 
     methodology = build_methodology_df(region, date_range, org_filter_name=org_filter_name)
 
     sheets = [
         ("Organisation Summary", org_summary),
+        ("Bundle Progression", bundle_progression),
         ("User Detail", user_detail),
         ("Monthly Ratings", monthly_ratings),
         ("Activity Usage", activity_usage_table),

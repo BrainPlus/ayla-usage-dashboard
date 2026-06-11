@@ -114,8 +114,11 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert set(app._SECTION_HELP) == {
         "overview",
         "logins_by_organisation",
+        "login_form_outcomes",
+        "delivery_funnel",
         "monthly_bundle_creations",
         "bundle_filter_breakdown",
+        "bundle_progression",
         "monthly_average_star_ratings",
         "group_feedback_by_question",
         "therapist_feedback_by_question",
@@ -133,12 +136,93 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert "signal to investigate" in app._SECTION_HELP["step_completion_depth"]
 
 
+def test_bundle_history_date_range_starts_at_earliest_bundle(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    bundles = pd.DataFrame([
+        {"created_date": "2025-06-01"},
+        {"created_date": "2024-03-15"},
+    ])
+
+    assert app._bundle_history_date_range(
+        bundles, date(2026, 6, 10)
+    ) == "2024-03-15,2026-06-10"
+    assert app._bundle_history_date_range(
+        pd.DataFrame(), date(2026, 6, 10)
+    ) == "2026-06-10,2026-06-10"
+
+
+def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    result = app._delivery_funnel_summary(
+        {
+            "total_deliver_selected_sessions": 10,
+            "total_active_delivery_sessions": 8,
+            "total_completed_sessions": 6,
+        }
+    )
+
+    assert pd.isna(result.iloc[0]["Drop-off from previous"])
+    assert pd.isna(result.iloc[0]["Drop-off %"])
+    assert result.iloc[1:].to_dict("records") == [
+        {
+            "Stage": "Active Delivery",
+            "Sessions": 8,
+            "Drop-off from previous": 2,
+            "Drop-off %": 20.0,
+        },
+        {
+            "Stage": "Completed Session",
+            "Sessions": 6,
+            "Drop-off from previous": 2,
+            "Drop-off %": 25.0,
+        },
+    ]
+
+
+def test_delivery_funnel_summary_clamps_negative_dropoff(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    result = app._delivery_funnel_summary(
+        {
+            "total_deliver_selected_sessions": 1,
+            "total_active_delivery_sessions": 2,
+            "total_completed_sessions": 3,
+        }
+    )
+
+    assert result.iloc[1:]["Drop-off from previous"].tolist() == [0.0, 0.0]
+    assert result.iloc[1:]["Drop-off %"].tolist() == [0.0, 0.0]
+
+
+def test_cached_delivery_funnel_reloads_stale_matomo_module(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    stale_matomo = ModuleType("matomo")
+    fresh_matomo = ModuleType("matomo")
+    fresh_matomo.get_delivery_funnel_instances = (
+        lambda date_range, org_id=None: (date_range, org_id)
+    )
+    app.matomo = stale_matomo
+    monkeypatch.setattr(app.importlib, "reload", lambda module: fresh_matomo)
+
+    assert app._cached_delivery_funnel("last365", "eu", 196) == ("last365", 196)
+    assert app.matomo is fresh_matomo
+
+
 def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) -> None:
     app = _import_app(monkeypatch)
 
     assert app._show_logins_by_organisation(None)
     assert not app._show_logins_by_organisation(196)
     assert not app._show_logins_by_organisation("unassigned")
+
+
+def test_login_form_outcomes_only_show_for_all_organisations(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._show_login_form_outcomes(None)
+    assert not app._show_login_form_outcomes(196)
+    assert not app._show_login_form_outcomes("unassigned")
 
 
 def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) -> None:

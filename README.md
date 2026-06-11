@@ -15,6 +15,9 @@ Live app: https://ayla-usage-dashboard.streamlit.app
 - Completed sessions in the selected reporting period
 - Overall average star ratings (group and therapist)
 - Logins by organisation bar chart
+- Login form attempts and failures across the shared Matomo site, plus successful
+  submissions filtered to identified users in the selected region. Pre-authentication
+  attempts and failures cannot be attributed to a region or organisation.
 - Daily visit activity line chart (visits and unique users per day)
 - Monthly average star rating trend (group vs therapist)
 

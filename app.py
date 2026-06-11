@@ -29,10 +29,13 @@ _REPORT_DATA_KEYS = (
     "user_detail",
     "org_summary",
     "global_summary",
+    "login_form_outcomes",
+    "delivery_funnel",
     "monthly_ratings",
     "monthly_bundle_creations",
     "bundle_filter_breakdown",
     "bundle_counts",
+    "bundle_progression",
     "activity_catalogue",
     "activity_usage",
     "step_completion_depth",
@@ -94,6 +97,16 @@ _SECTION_HELP = {
         "Number of Matomo visits, grouped by organisation, during the selected date "
         "range. A visit is treated as a login/browser session."
     ),
+    "login_form_outcomes": (
+        "Login form events during the selected date range. Successful submissions "
+        "are restricted to identified users in the selected region. Attempts and "
+        "failures happen before authentication and therefore cover all regions."
+    ),
+    "delivery_funnel": (
+        "Progression from selecting Deliver, through at least one high-confidence "
+        "deliver-mode activity signal, to a deliver-mode Session Complete event. "
+        "Each stage is deduplicated by Matomo visit + bundle + session ID."
+    ),
     "monthly_average_star_ratings": (
         "Response-weighted average group and therapist ratings submitted during the "
         "selected date range, grouped by calendar month."
@@ -105,6 +118,11 @@ _SECTION_HELP = {
     "bundle_filter_breakdown": (
         "Severity, age, and physical requirement preferences selected for bundles "
         "created during the reporting period. Missing preferences are shown as Not set."
+    ),
+    "bundle_progression": (
+        "Configured CST session progression for each bundle across its full history. "
+        "Progress counts unique configured sessions with a deduplicated deliver-mode "
+        "Session Complete event. Incomplete bundles are flagged as stalled after 30 days."
     ),
     "group_feedback_by_question": (
         "Monthly response-weighted ratings for each question answered by groups. "
@@ -128,7 +146,8 @@ _SECTION_HELP = {
         "Organisation-level details. Logins, active users, session-duration metrics, "
         "completed sessions, activity averages, and ratings use the selected date "
         "range. Total users is the current registered-user count. Last login is the "
-        "most recent recorded visit found within the last 365 days."
+        "most recent recorded visit found within the last 365 days. Days since last "
+        "completed session uses deliver-mode Session Complete events across bundle history."
     ),
     "talking_point_engagement": (
         "Approximate ratio of Talking Point Expand Clicks to Step Forward Clicks "
@@ -182,6 +201,10 @@ def _show_logins_by_organisation(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
+def _show_login_form_outcomes(fetched_org_id) -> bool:
+    return fetched_org_id is None
+
+
 def _show_user_organisation_filter(fetched_org_id) -> bool:
     return fetched_org_id is None
 
@@ -221,6 +244,34 @@ def _bundle_filter_chart(
         .set_index("filter_value")[["bundle_count"]]
         .rename(columns={"bundle_count": "Bundles"})
     )
+
+
+def _delivery_funnel_summary(global_summary: dict) -> pd.DataFrame:
+    counts = [
+        int(global_summary.get("total_deliver_selected_sessions", 0)),
+        int(global_summary.get("total_active_delivery_sessions", 0)),
+        int(global_summary.get("total_completed_sessions", 0)),
+    ]
+    rows = []
+    for index, (stage, count) in enumerate(
+        zip(("Deliver Selected", "Active Delivery", "Completed Session"), counts)
+    ):
+        previous = counts[index - 1] if index > 0 else None
+        dropoff = max(0, previous - count) if previous is not None else None
+        dropoff_pct = (
+            round(dropoff / previous * 100, 1)
+            if previous not in (None, 0)
+            else None
+        )
+        rows.append(
+            {
+                "Stage": stage,
+                "Sessions": count,
+                "Drop-off from previous": dropoff,
+                "Drop-off %": dropoff_pct,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _render_bundle_filter_breakdown(bundle_filter_breakdown: pd.DataFrame) -> None:
@@ -334,6 +385,23 @@ def _get_activity_usage_by_id(
     return matomo.get_activity_usage_by_id(date_range)
 
 
+def _get_login_form_outcomes(
+    date_range: str,
+    allowed_user_ids: frozenset[str],
+):
+    global matomo
+    if not hasattr(matomo, "get_login_form_outcomes"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_login_form_outcomes(date_range, allowed_user_ids)
+
+
+def _get_delivery_funnel_instances(date_range: str, org_id):
+    global matomo
+    if not hasattr(matomo, "get_delivery_funnel_instances"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_delivery_funnel_instances(date_range, org_id=org_id)
+
+
 def _build_global_summary(org_summary, bundle_counts, star_ratings):
     # commit c814074: stale merger may only accept 2 args — check signature before calling
     # so unrelated TypeErrors inside build_global_summary are not silently swallowed.
@@ -440,6 +508,20 @@ def _last_login_user_ids(
     return sorted(set(db_users["user_id"].astype(str)))
 
 
+def _bundle_history_date_range(
+    bundle_configurations: pd.DataFrame,
+    as_of_date: date,
+) -> str:
+    if "created_date" not in bundle_configurations:
+        return f"{as_of_date},{as_of_date}"
+    created_dates = pd.to_datetime(
+        bundle_configurations["created_date"], errors="coerce"
+    )
+    earliest = created_dates.min()
+    start_date = earliest.date() if pd.notna(earliest) else as_of_date
+    return f"{start_date},{as_of_date}"
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -449,8 +531,17 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_completed_sessions(date_range: str, region: str, org_id):
-    return matomo.get_completed_sessions(date_range, org_id=org_id)
+def _cached_login_form_outcomes(
+    date_range: str,
+    region: str,
+    allowed_user_ids: frozenset[str],
+):
+    return _get_login_form_outcomes(date_range, allowed_user_ids)
+
+
+@st.cache_data(ttl=3600)
+def _cached_delivery_funnel(date_range: str, region: str, org_id):
+    return _get_delivery_funnel_instances(date_range, org_id)
 
 
 @st.cache_data(ttl=3600)
@@ -532,11 +623,6 @@ def _cached_engagement_events(
     return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
 
 
-@st.cache_data(ttl=3600)
-def _cached_organisations(region: str) -> pd.DataFrame:
-    return database.get_organisations(region)
-
-
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -544,7 +630,7 @@ with st.sidebar:
 
     region = st.selectbox("Region", ["eu", "uk"])
 
-    orgs_df = _cached_organisations(region)
+    orgs_df = database.get_organisations(region)
     org_options = (
         ["All organisations"]
         + orgs_df["organisation_name"].tolist()
@@ -604,6 +690,12 @@ if pull:
             bundle_counts = database.get_bundle_counts_per_org(
                 region, org_id=selected_org_id
             )
+            bundle_configurations = database.get_bundle_configurations(
+                region, org_id=selected_org_id
+            )
+            bundle_history_date_range = _bundle_history_date_range(
+                bundle_configurations, today
+            )
             monthly_bundle_creations = _get_monthly_bundle_creations(
                 region, start_date, end_date, org_id=selected_org_id,
             )
@@ -611,6 +703,9 @@ if pull:
                 region, start_date, end_date, org_id=selected_org_id,
             )
             star_ratings = database.get_star_ratings_by_org(
+                region, start_date, end_date, org_id=selected_org_id,
+            )
+            feedback_submissions = database.get_feedback_submissions(
                 region, start_date, end_date, org_id=selected_org_id,
             )
             monthly_ratings = database.get_monthly_star_ratings(
@@ -621,8 +716,32 @@ if pull:
         # Step 2 — Matomo queries (cached after first run)
         with st.spinner("Fetching Matomo analytics..."):
             logins = _cached_logins(date_range)
-            completed_sessions = _cached_completed_sessions(
+            login_form_outcomes = (
+                _cached_login_form_outcomes(date_range, region, database_user_ids)
+                if selected_org_id is None
+                else None
+            )
+            delivery_funnel = _cached_delivery_funnel(
                 date_range, region, selected_org_id
+            )
+            bundle_history_funnel = _cached_delivery_funnel(
+                bundle_history_date_range, region, selected_org_id
+            )
+            completed_sessions = delivery_funnel.loc[
+                delivery_funnel["completed_session"],
+                ["visit_id", "bundle_id", "session_id", "user_id"],
+            ].reset_index(drop=True)
+            completed_session_history = bundle_history_funnel.loc[
+                bundle_history_funnel["completed_session"],
+                [
+                    "visit_id",
+                    "bundle_id",
+                    "session_id",
+                    "user_id",
+                    "completed_session_date",
+                ],
+            ].rename(columns={"completed_session_date": "completion_date"}).reset_index(
+                drop=True
             )
             activity_completions = _cached_activity_completions(
                 date_range, region, selected_org_id
@@ -652,6 +771,12 @@ if pull:
         logins = _filter_to_database_users(logins, database_user_ids)
         completed_sessions = _filter_to_database_users(
             completed_sessions, database_user_ids
+        )
+        completed_session_history = _filter_to_database_users(
+            completed_session_history, database_user_ids
+        )
+        delivery_funnel = _filter_to_database_users(
+            delivery_funnel, database_user_ids
         )
         activity_completions = _filter_to_database_users(
             activity_completions, database_user_ids
@@ -691,9 +816,21 @@ if pull:
                 db_users, logins, last_login, visit_durations, activity_completions,
                 completed_sessions,
             )
+            bundle_progression = merger.build_bundle_progression(
+                bundle_configurations,
+                completed_session_history,
+                as_of_date=today,
+            )
             org_summary = merger.build_org_summary(
                 user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
+                delivery_funnel=delivery_funnel,
+                recent_completed_sessions=completed_session_history,
+                as_of_date=today,
+                feedback_submissions=feedback_submissions,
+            )
+            org_summary = merger.add_bundle_progression_to_org_summary(
+                org_summary, bundle_progression
             )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
@@ -706,10 +843,13 @@ if pull:
             "user_detail": user_detail,
             "org_summary": org_summary,
             "global_summary": global_summary,
+            "login_form_outcomes": login_form_outcomes,
+            "delivery_funnel": delivery_funnel,
             "monthly_ratings": monthly_ratings,
             "monthly_bundle_creations": monthly_bundle_creations,
             "bundle_filter_breakdown": bundle_filter_breakdown,
             "bundle_counts": bundle_counts,
+            "bundle_progression": bundle_progression,
             "activity_catalogue": activity_catalogue,
             "activity_usage": activity_usage,
             "step_completion_depth": step_completion_depth,
@@ -752,6 +892,10 @@ else:
         "bundle_filter_breakdown",
         pd.DataFrame(columns=["filter_type", "filter_value", "bundle_count"]),
     )
+    bundle_progression = st.session_state.get(
+        "bundle_progression",
+        pd.DataFrame(),
+    )
     fetched_start_date, fetched_end_date = (
         date.fromisoformat(value)
         for value in st.session_state["fetched_date_range"].split(",")
@@ -773,6 +917,20 @@ else:
             col.metric(label, global_summary[key], help=help_text)
 
         st.divider()
+        st.markdown(
+            "**Delivery Funnel**",
+            help=_SECTION_HELP["delivery_funnel"],
+        )
+        st.dataframe(
+            _delivery_funnel_summary(global_summary),
+            use_container_width=True,
+            column_config={
+                "Sessions": st.column_config.NumberColumn(format="%d"),
+                "Drop-off from previous": st.column_config.NumberColumn(format="%d"),
+                "Drop-off %": st.column_config.NumberColumn(format="%.1f%%"),
+            },
+            hide_index=True,
+        )
 
         if _show_logins_by_organisation(fetched_org_id):
             st.markdown(
@@ -784,6 +942,31 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
+
+        if _show_login_form_outcomes(fetched_org_id):
+            st.markdown(
+                "**Login Form Outcomes**",
+                help=_SECTION_HELP["login_form_outcomes"],
+            )
+            login_form_outcomes = st.session_state.get(
+                "login_form_outcomes",
+                {"attempts": 0, "successes": 0, "failures": 0},
+            )
+            login_cols = st.columns(3)
+            for col, (key, label) in zip(
+                login_cols,
+                (
+                    ("attempts", "Attempts (all regions)"),
+                    ("successes", "Successes (selected region)"),
+                    ("failures", "Failures (all regions)"),
+                ),
+            ):
+                col.metric(label, login_form_outcomes[key])
+            st.caption(
+                "Attempts and failures are pre-authentication events, so they cannot "
+                "be filtered by region or attributed to specific organisations. "
+                "Do not use these counts for organisation-level conclusions."
+            )
 
         if _show_global_bundle_creation_chart(fetched_org_id):
             st.markdown(
@@ -1118,12 +1301,74 @@ else:
                         "or browsing, not real sessions"
                     ),
                 ),
+                "deliver_selected_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-mode Prepare/Deliver dialog - Deliver Click events, "
+                        "deduplicated by Matomo visit + bundle + session ID."
+                    ),
+                ),
+                "active_delivery_sessions": st.column_config.NumberColumn(
+                    help=(
+                        "Deliver-selected session instances with at least one "
+                        "high-confidence deliver-mode activity signal."
+                    ),
+                ),
                 "completed_sessions": st.column_config.NumberColumn(
                     help=(
                         "Deliver-mode Session Complete events in the selected period, "
                         "deduplicated by Matomo visit + bundle + session ID. Repeat "
                         "deliveries in separate visits are counted separately."
                     ),
+                ),
+                "full_programmes": st.column_config.NumberColumn(
+                    "Full programmes",
+                    help=(
+                        "Bundles that completed every configured CST session across "
+                        "their full history. A value above zero is a positive indicator."
+                    ),
+                ),
+                "group_feedback_coverage": st.column_config.TextColumn(
+                    "Group feedback coverage",
+                    help=(
+                        "Unique bundle + CST session pairs with group feedback divided "
+                        "by unique completed bundle + CST session pairs in the selected period."
+                    ),
+                ),
+                "therapist_feedback_coverage": st.column_config.TextColumn(
+                    "Therapist feedback coverage",
+                    help=(
+                        "Unique bundle + CST session pairs with therapist feedback divided "
+                        "by unique completed bundle + CST session pairs in the selected period."
+                    ),
+                ),
+                "therapist_comment_rate": st.column_config.TextColumn(
+                    "Therapist comment rate",
+                    help=(
+                        "Therapist feedback submissions with a non-empty comment divided "
+                        "by all therapist feedback submissions in the selected period."
+                    ),
+                ),
+                "days_since_last_completed_session": st.column_config.TextColumn(
+                    "Days since last completed session",
+                    help=(
+                        "Calendar days since the organisation's most recent deliver-mode "
+                        "Session Complete event across bundle history. Organisations without "
+                        "one show No recent session."
+                    ),
+                ),
+                "deliver_to_active_dropoff": st.column_config.NumberColumn(
+                    help="Deliver Selected minus Active Delivery.",
+                ),
+                "deliver_to_active_dropoff_pct": st.column_config.NumberColumn(
+                    help="Drop-off from Deliver Selected to Active Delivery.",
+                    format="%.1f%%",
+                ),
+                "active_to_completed_dropoff": st.column_config.NumberColumn(
+                    help="Active Delivery minus Completed Sessions.",
+                ),
+                "active_to_completed_dropoff_pct": st.column_config.NumberColumn(
+                    help="Drop-off from Active Delivery to Completed Sessions.",
+                    format="%.1f%%",
                 ),
                 "avg_activities_per_session": st.column_config.NumberColumn(
                     help=(
@@ -1147,6 +1392,58 @@ else:
             }),
             use_container_width=True,
         )
+
+        st.divider()
+        st.markdown(
+            "**Bundle Progression**",
+            help=_SECTION_HELP["bundle_progression"],
+        )
+        if bundle_progression.empty:
+            st.info("No bundles are available for the selected organisation scope.")
+        else:
+            st.dataframe(
+                bundle_progression,
+                column_config=_column_config_for(bundle_progression, {
+                    "organisation_name": st.column_config.TextColumn("Organisation"),
+                    "bundle_name": st.column_config.TextColumn("Bundle"),
+                    "bundle_id": st.column_config.TextColumn("Bundle ID"),
+                    "completed_configured_sessions": st.column_config.NumberColumn(
+                        "Completed configured sessions",
+                        help=(
+                            "Unique configured sessions with at least one deduplicated "
+                            "deliver-mode Session Complete event."
+                        ),
+                    ),
+                    "total_configured_sessions": st.column_config.NumberColumn(
+                        "Configured sessions",
+                        help="Actual number of sessions configured for this bundle.",
+                    ),
+                    "progress": st.column_config.TextColumn(
+                        "Progress",
+                        help="Completed configured sessions / total configured sessions.",
+                    ),
+                    "status": st.column_config.TextColumn(
+                        "Status",
+                        help=(
+                            "Incomplete bundles with no newly completed configured "
+                            "session in 30 or 60 days are flagged as stalled."
+                        ),
+                    ),
+                    "days_since_last_completion": st.column_config.NumberColumn(
+                        "Days since last completion",
+                    ),
+                    "avg_days_between_completions": st.column_config.NumberColumn(
+                        "Avg days between completions",
+                        help=(
+                            "Average calendar days between first completions of unique "
+                            "configured sessions."
+                        ),
+                        format="%.1f",
+                    ),
+                }),
+                hide_index=True,
+                use_container_width=True,
+            )
 
         st.divider()
         st.markdown(
@@ -1331,6 +1628,7 @@ if "user_detail" in st.session_state:
             _download_activity_usage,
             st.session_state.get("activity_catalogue", {}),
         ),
+        bundle_progression=st.session_state.get("bundle_progression", pd.DataFrame()),
         org_filter_name=(
             None
             if st.session_state.get("fetched_org_id") is None

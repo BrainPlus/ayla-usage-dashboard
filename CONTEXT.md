@@ -11,11 +11,11 @@ A care provider (e.g. a care home) that has an account on Ayla. The unit of comm
 _Avoid_: Account, client, customer
 
 **Bundle**:
-A group of 14 fixed CST therapy sessions created by a therapist for a specific patient group. Called "group" in the therapist-facing UI.
+A configured sequence of CST therapy sessions created by a therapist for a specific patient group. Called "group" in the therapist-facing UI. The number of configured sessions varies by bundle.
 _Avoid_: Group (ambiguous with patient group)
 
 **CST Session**:
-One of the 14 fixed therapy sessions within a bundle, delivered live to a group of patients. Identified by a `(bundle_id, session_id)` pair in Matomo and the database.
+One configured therapy session within a bundle, delivered live to a group of patients. Identified by a `(bundle_id, session_id)` pair in Matomo and the database.
 _Avoid_: Session (overloaded — see also Matomo Visit)
 
 **Prepare Mode**:

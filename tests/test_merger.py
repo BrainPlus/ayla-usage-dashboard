@@ -524,6 +524,291 @@ def test_completed_sessions_are_consistent_across_user_org_and_global_summaries(
     assert global_summary["total_completed_sessions"] == 2
 
 
+def test_feedback_coverage_uses_unique_bundle_session_pairs_and_submission_comments() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v3", "bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+        {"visit_id": "v4", "bundle_id": "b1", "session_id": "s3", "user_id": "u1"},
+    ])
+    feedback_submissions = pd.DataFrame([
+        {
+            "organisation_name": "Org A", "target": "groups",
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
+        },
+        {
+            "organisation_name": "Org A", "target": "groups",
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
+        },
+        {
+            "organisation_name": "Org A", "target": "groups",
+            "bundle_id": "b1", "session_id": "s2", "has_comment": False,
+        },
+        {
+            "organisation_name": "Org A", "target": "therapists",
+            "bundle_id": "b1", "session_id": "s1", "has_comment": True,
+        },
+        {
+            "organisation_name": "Org A", "target": "therapists",
+            "bundle_id": "b1", "session_id": "s1", "has_comment": False,
+        },
+        {
+            "organisation_name": "Org A", "target": "therapists",
+            "bundle_id": "b1", "session_id": "s2", "has_comment": True,
+        },
+        {
+            "organisation_name": "Org A", "target": "groups",
+            "bundle_id": "b1", "session_id": "not-completed", "has_comment": False,
+        },
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    result = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+        feedback_submissions=feedback_submissions,
+    ).iloc[0]
+
+    assert result["completed_sessions"] == 4
+    assert result["group_feedback_coverage"] == "67%"
+    assert result["therapist_feedback_coverage"] == "67%"
+    assert result["therapist_comment_rate"] == "67%"
+
+
+def test_empty_completed_sessions_guarantee_required_columns() -> None:
+    result = merger._deduplicate_completed_sessions(pd.DataFrame())
+
+    assert list(result.columns) == ["visit_id", "bundle_id", "session_id", "user_id"]
+
+
+def test_feedback_rates_show_no_sessions_for_organisations_without_completed_pairs() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+    )
+    feedback_submissions = pd.DataFrame([
+        {
+            "organisation_name": "Org A", "target": "therapists",
+            "bundle_id": "b1", "session_id": "s1", "has_comment": True,
+        },
+    ])
+
+    result = merger.build_org_summary(
+        user_detail,
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+        feedback_submissions=feedback_submissions,
+    ).iloc[0]
+
+    assert result["group_feedback_coverage"] == "No sessions"
+    assert result["therapist_feedback_coverage"] == "No sessions"
+    assert result["therapist_comment_rate"] == "No sessions"
+
+
+def test_feedback_coverage_deduplicates_completed_pairs_within_each_organisation() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org B"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s1", "user_id": "u2"},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    result = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([
+            {"organisation_name": "Org A", "user_count": 1},
+            {"organisation_name": "Org B", "user_count": 1},
+        ]),
+        visit_durations=_visit_durations([]),
+    ).set_index("organisation_name")
+
+    assert result.loc["Org A", "group_feedback_coverage"] == "0%"
+    assert result.loc["Org B", "group_feedback_coverage"] == "0%"
+
+
+def test_days_since_last_completed_session_uses_latest_deduplicated_session() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org B"},
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+    )
+    recent_completed_sessions = pd.DataFrame([
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1",
+            "user_id": "u1", "completion_date": "2026-05-01",
+        },
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1",
+            "user_id": "u1", "completion_date": "2026-05-09",
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2",
+            "user_id": "u1", "completion_date": "2026-05-08",
+        },
+    ])
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        _empty(["visit_id", "bundle_id", "session_id", "user_id"]),
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([
+            {"organisation_name": "Org A", "user_count": 1},
+            {"organisation_name": "Org B", "user_count": 1},
+        ]),
+        visit_durations=_visit_durations([]),
+        recent_completed_sessions=recent_completed_sessions,
+        as_of_date=date(2026, 5, 10),
+    ).set_index("organisation_name")
+
+    assert org_summary.loc["Org A", "days_since_last_completed_session"] == "1"
+    assert (
+        org_summary.loc["Org B", "days_since_last_completed_session"]
+        == "No recent session"
+    )
+
+
+def test_delivery_funnel_counts_and_dropoffs_are_aggregated_by_org() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+        {"user_id": "u2", "email": "u2@example.com", "organisation_name": "Org B"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+    ])
+    delivery_funnel = pd.DataFrame([
+        {
+            "visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": True, "completed_session": True,
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": False, "completed_session": False,
+        },
+        {
+            "visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1",
+            "deliver_selected": True, "active_delivery": False, "completed_session": False,
+        },
+    ])
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    org_summary = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([
+            {"organisation_name": "Org A", "user_count": 1},
+            {"organisation_name": "Org B", "user_count": 1},
+        ]),
+        visit_durations=_visit_durations([]),
+        delivery_funnel=delivery_funnel,
+    )
+    global_summary = merger.build_global_summary(
+        org_summary,
+        _empty(["organisation_name", "total_groups"]),
+    )
+
+    org_a = org_summary.set_index("organisation_name").loc["Org A"]
+    assert org_a["deliver_selected_sessions"] == 2
+    assert org_a["active_delivery_sessions"] == 1
+    assert org_a["completed_sessions"] == 1
+    assert org_a["deliver_to_active_dropoff"] == 1
+    assert org_a["deliver_to_active_dropoff_pct"] == 50.0
+    assert org_a["active_to_completed_dropoff"] == 0
+    assert org_a["active_to_completed_dropoff_pct"] == 0.0
+
+    org_b = org_summary.set_index("organisation_name").loc["Org B"]
+    assert org_b["deliver_selected_sessions"] == 0
+    assert org_b["active_delivery_sessions"] == 0
+    assert org_b["completed_sessions"] == 0
+    assert org_b["deliver_to_active_dropoff_pct"] == 0.0
+    assert global_summary["total_deliver_selected_sessions"] == 2
+    assert global_summary["total_active_delivery_sessions"] == 1
+    assert global_summary["total_completed_sessions"] == 1
+
+
+def test_delivery_funnel_dropoffs_are_clamped_at_zero() -> None:
+    db_users = pd.DataFrame([
+        {"user_id": "u1", "email": "u1@example.com", "organisation_name": "Org A"},
+    ])
+    completed_sessions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "b1", "session_id": "s1", "user_id": "u1"},
+        {"visit_id": "v2", "bundle_id": "b1", "session_id": "s2", "user_id": "u1"},
+    ])
+    delivery_funnel = completed_sessions.assign(
+        deliver_selected=[True, False],
+        active_delivery=[False, True],
+        completed_session=[True, True],
+    )
+    user_detail = merger.build_user_detail(
+        db_users,
+        _empty(["user_id", "visits"]),
+        _empty(["user_id", "last_login_date"]),
+        _visit_durations([]),
+        _empty(["user_id", "activities_completed"]),
+        completed_sessions,
+    )
+
+    result = merger.build_org_summary(
+        user_detail,
+        completed_sessions,
+        _empty(["organisation_name", "target", "avg_rating", "total_responses"]),
+        pd.DataFrame([{"organisation_name": "Org A", "user_count": 1}]),
+        visit_durations=_visit_durations([]),
+        delivery_funnel=delivery_funnel,
+    ).iloc[0]
+
+    assert result["deliver_to_active_dropoff"] == 0
+    assert result["deliver_to_active_dropoff_pct"] == 0.0
+    assert result["active_to_completed_dropoff"] == 0
+    assert result["active_to_completed_dropoff_pct"] == 0.0
+
+
 def test_build_activity_usage_table_known_ids() -> None:
     """Known IDs get mapped to catalogue titles, sorted descending by completions."""
     usage = pd.DataFrame({"activity_id": ["abc", "def"], "completion_count": [5, 10]})
@@ -983,3 +1268,109 @@ def test_daily_visit_activity_single_date_period() -> None:
     assert len(result) == 1
     assert result.iloc[0]["visits"] == 1
     assert result.iloc[0]["unique_users"] == 1
+
+
+def test_bundle_progression_uses_actual_configured_sessions_and_first_completions() -> None:
+    bundles = pd.DataFrame([
+        {
+            "bundle_id": "101",
+            "bundle_name": "Short programme",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1", "s2", "s3"],
+        },
+        {
+            "bundle_id": "102",
+            "bundle_name": "Complete programme",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1"],
+        },
+    ])
+    completions = pd.DataFrame([
+        {"visit_id": "v1", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-01"},
+        {"visit_id": "v1", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-01"},
+        {"visit_id": "v2", "bundle_id": "101", "session_id": "s1", "completion_date": "2026-01-03"},
+        {"visit_id": "v3", "bundle_id": "101", "session_id": "s2", "completion_date": "2026-01-11"},
+        {"visit_id": "v4", "bundle_id": "101", "session_id": "not-configured", "completion_date": "2026-01-12"},
+        {"visit_id": "v5", "bundle_id": "102", "session_id": "s1", "completion_date": "2026-02-01"},
+    ])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 2, 15)
+    ).set_index("bundle_id")
+
+    assert result.loc["101", "progress"] == "2 / 3"
+    assert result.loc["101", "completed_configured_sessions"] == 2
+    assert result.loc["101", "total_configured_sessions"] == 3
+    assert result.loc["101", "avg_days_between_completions"] == 10.0
+    assert result.loc["101", "status"] == "Stalled 30+ days"
+    assert result.loc["102", "progress"] == "1 / 1"
+    assert result.loc["102", "status"] == "Complete"
+
+
+def test_bundle_progression_flags_60_day_stalls_and_not_started_bundles() -> None:
+    bundles = pd.DataFrame([
+        {
+            "bundle_id": "old",
+            "bundle_name": "Old",
+            "organisation_name": "Org A",
+            "configured_session_ids": ["s1", "s2"],
+        },
+        {
+            "bundle_id": "new",
+            "bundle_name": "New",
+            "organisation_name": "Org B",
+            "configured_session_ids": ["s1"],
+        },
+    ])
+    completions = pd.DataFrame([{
+        "visit_id": "v1", "bundle_id": "old", "session_id": "s1",
+        "completion_date": "2026-01-01",
+    }])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 3, 15)
+    ).set_index("bundle_id")
+
+    assert result.loc["old", "status"] == "Stalled 60+ days"
+    assert result.loc["new", "status"] == "Not started"
+    assert pd.isna(result.loc["new", "days_since_last_completion"])
+
+
+def test_bundle_progression_counts_completion_when_date_is_missing() -> None:
+    bundles = pd.DataFrame([{
+        "bundle_id": "101",
+        "bundle_name": "Programme",
+        "organisation_name": "Org A",
+        "configured_session_ids": ["s1", "s2"],
+    }])
+    completions = pd.DataFrame([{
+        "visit_id": "v1", "bundle_id": "101", "session_id": "s1",
+        "completion_date": None,
+    }])
+
+    result = merger.build_bundle_progression(
+        bundles, completions, as_of_date=date(2026, 3, 15)
+    ).iloc[0]
+
+    assert result["progress"] == "1 / 2"
+    assert result["status"] == "In progress"
+    assert pd.isna(result["days_since_last_completion"])
+
+
+def test_org_summary_adds_full_programme_positive_indicator() -> None:
+    org_summary = pd.DataFrame([
+        {"organisation_name": "Org A"},
+        {"organisation_name": "Org B"},
+    ])
+    progression = pd.DataFrame([
+        {"organisation_name": "Org A", "status": "Complete"},
+        {"organisation_name": "Org A", "status": "Complete"},
+        {"organisation_name": "Org B", "status": "In progress"},
+    ])
+
+    result = merger.add_bundle_progression_to_org_summary(
+        org_summary, progression
+    ).set_index("organisation_name")
+
+    assert result.loc["Org A", "full_programmes"] == 2
+    assert result.loc["Org B", "full_programmes"] == 0

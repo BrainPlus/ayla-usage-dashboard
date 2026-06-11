@@ -6,6 +6,8 @@ from datetime import date
 import pandas as pd
 
 _NO_USAGE = "No tracked usage"
+_NO_RECENT_SESSION = "No recent session"
+_NO_SESSIONS = "No sessions"
 _NO_ORG = "Unassigned / No organisation"
 _REAL_SESSION_MIN_SECONDS = 20 * 60
 
@@ -96,6 +98,10 @@ def build_org_summary(
     star_ratings: pd.DataFrame,
     org_user_counts: pd.DataFrame,
     visit_durations: pd.DataFrame | None = None,
+    delivery_funnel: pd.DataFrame | None = None,
+    recent_completed_sessions: pd.DataFrame | None = None,
+    as_of_date: date | None = None,
+    feedback_submissions: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Builds the per-organisation summary table.
@@ -109,6 +115,13 @@ def build_org_summary(
         org_user_counts:        organisation_name, user_count
         visit_durations:        user_id, visit_duration_seconds, has_deliver_action
                                 (raw visits — used for org-level min/max real session time)
+        delivery_funnel:        session instances with deliver_selected,
+                                active_delivery, and completed_session signals
+        recent_completed_sessions:
+                                completed session history with completion_date
+        as_of_date:              date used to calculate session recency (defaults to today)
+        feedback_submissions:    organisation_name, target, bundle_id, session_id,
+                                 has_comment
 
     Returns:
         DataFrame with columns:
@@ -164,6 +177,142 @@ def build_org_summary(
     )
     agg = agg.merge(session_counts, on="organisation_name", how="left")
 
+    # --- feedback coverage: unique bundle/session pairs per org ---
+    completed_pairs = completed_sessions.merge(
+        user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+        on="user_id",
+        how="left",
+    ).drop_duplicates(
+        subset=["organisation_name", "bundle_id", "session_id"]
+    )
+    completed_pair_counts = (
+        completed_pairs.groupby("organisation_name")
+        .size()
+        .to_dict()
+    )
+    completed_pair_keys = completed_pairs[
+        ["organisation_name", "bundle_id", "session_id"]
+    ]
+    submission_columns = [
+        "organisation_name",
+        "target",
+        "bundle_id",
+        "session_id",
+        "has_comment",
+    ]
+    submissions = (
+        feedback_submissions.reindex(columns=submission_columns).copy()
+        if feedback_submissions is not None
+        else pd.DataFrame(columns=submission_columns)
+    )
+    for target, column in (
+        ("groups", "group_feedback_coverage"),
+        ("therapists", "therapist_feedback_coverage"),
+    ):
+        target_submissions = submissions[submissions["target"] == target]
+        feedback_pair_counts = (
+            target_submissions.dropna(subset=["bundle_id", "session_id"])
+            .drop_duplicates(
+                subset=["organisation_name", "bundle_id", "session_id"]
+            )
+            .merge(
+                completed_pair_keys,
+                on=["organisation_name", "bundle_id", "session_id"],
+                how="inner",
+            )
+            .groupby("organisation_name")
+            .size()
+            .to_dict()
+        )
+        agg[column] = agg["organisation_name"].map(
+            lambda org: _format_coverage_rate(
+                feedback_pair_counts.get(org, 0),
+                completed_pair_counts.get(org, 0),
+            )
+        )
+
+    therapist_submissions = submissions[submissions["target"] == "therapists"].copy()
+    if not therapist_submissions.empty:
+        therapist_submissions["has_comment"] = (
+            therapist_submissions["has_comment"].fillna(False).astype(bool)
+        )
+        therapist_comment_counts = (
+            therapist_submissions.groupby("organisation_name")["has_comment"]
+            .agg(["sum", "count"])
+            .to_dict("index")
+        )
+    else:
+        therapist_comment_counts = {}
+    agg["therapist_comment_rate"] = agg["organisation_name"].map(
+        lambda org: (
+            _NO_SESSIONS
+            if completed_pair_counts.get(org, 0) == 0
+            else _format_percentage(
+                therapist_comment_counts.get(org, {}).get("sum", 0),
+                therapist_comment_counts.get(org, {}).get("count", 0),
+            )
+        )
+    )
+
+    # --- days since last completed session: same deduplication as completed sessions ---
+    if recent_completed_sessions is not None and not recent_completed_sessions.empty:
+        recent = recent_completed_sessions.copy()
+        recent["completion_date"] = pd.to_datetime(
+            recent["completion_date"], errors="coerce"
+        ).dt.normalize()
+        recent = _deduplicate_completed_sessions(
+            recent.sort_values("completion_date", ascending=False)
+        ).merge(
+            user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+            on="user_id",
+            how="left",
+        )
+        last_completed_by_org = (
+            recent.dropna(subset=["completion_date"])
+            .groupby("organisation_name", as_index=False)["completion_date"]
+            .max()
+        )
+        reference_date = pd.Timestamp(as_of_date or date.today())
+        last_completed_by_org["days_since_last_completed_session"] = (
+            reference_date - last_completed_by_org["completion_date"]
+        ).dt.days.clip(lower=0)
+        agg = agg.merge(
+            last_completed_by_org[
+                ["organisation_name", "days_since_last_completed_session"]
+            ],
+            on="organisation_name",
+            how="left",
+        )
+    else:
+        agg["days_since_last_completed_session"] = pd.NA
+    agg["days_since_last_completed_session"] = (
+        agg["days_since_last_completed_session"]
+        .astype("Int64")
+        .astype("string")
+        .fillna(_NO_RECENT_SESSION)
+    )
+
+    # --- delivery funnel: unique (visit_id, bundle_id, session_id) per org ---
+    if delivery_funnel is not None and not delivery_funnel.empty:
+        funnel = delivery_funnel.drop_duplicates(
+            subset=["visit_id", "bundle_id", "session_id"]
+        ).merge(
+            user_detail[["user_id", "organisation_name"]].drop_duplicates(),
+            on="user_id",
+            how="left",
+        )
+        funnel_counts = (
+            funnel.groupby("organisation_name", as_index=False)
+            .agg(
+                deliver_selected_sessions=("deliver_selected", "sum"),
+                active_delivery_sessions=("active_delivery", "sum"),
+            )
+        )
+        agg = agg.merge(funnel_counts, on="organisation_name", how="left")
+    else:
+        agg["deliver_selected_sessions"] = 0
+        agg["active_delivery_sessions"] = 0
+
     # --- avg activities per session ---
     activities_by_org = (
         user_detail.groupby("organisation_name")["activities_completed"]
@@ -205,8 +354,22 @@ def build_org_summary(
         "logins",
         "short_visit_count",
         "completed_sessions",
+        "deliver_selected_sessions",
+        "active_delivery_sessions",
     ]
     agg[numeric_cols] = agg[numeric_cols].fillna(0).astype(int)
+    agg["deliver_to_active_dropoff"] = (
+        agg["deliver_selected_sessions"] - agg["active_delivery_sessions"]
+    ).clip(lower=0)
+    agg["deliver_to_active_dropoff_pct"] = _dropoff_percentage(
+        agg["deliver_to_active_dropoff"], agg["deliver_selected_sessions"]
+    )
+    agg["active_to_completed_dropoff"] = (
+        agg["active_delivery_sessions"] - agg["completed_sessions"]
+    ).clip(lower=0)
+    agg["active_to_completed_dropoff_pct"] = _dropoff_percentage(
+        agg["active_to_completed_dropoff"], agg["active_delivery_sessions"]
+    )
     agg["median_prepare_minutes"] = agg["median_prepare_minutes"].fillna(0.0)
     agg["groups_avg_rating"] = agg["groups_avg_rating"].fillna(0.0).round(2)
     agg["therapists_avg_rating"] = agg["therapists_avg_rating"].fillna(0.0).round(2)
@@ -283,7 +446,17 @@ def build_org_summary(
         "min_real_session_minutes",
         "max_real_session_minutes",
         "short_visit_count",
+        "deliver_selected_sessions",
+        "active_delivery_sessions",
         "completed_sessions",
+        "group_feedback_coverage",
+        "therapist_feedback_coverage",
+        "therapist_comment_rate",
+        "days_since_last_completed_session",
+        "deliver_to_active_dropoff",
+        "deliver_to_active_dropoff_pct",
+        "active_to_completed_dropoff",
+        "active_to_completed_dropoff_pct",
         "avg_activities_per_session",
         "last_login_date",
         "groups_avg_rating",
@@ -291,14 +464,176 @@ def build_org_summary(
     ]]
 
 
+def _dropoff_percentage(dropoff: pd.Series, previous_stage: pd.Series) -> pd.Series:
+    denominator = previous_stage.replace(0, pd.NA)
+    return (
+        pd.to_numeric(dropoff / denominator * 100, errors="coerce")
+        .fillna(0.0)
+        .round(1)
+    )
+
+
+def _format_coverage_rate(numerator: int, completed_pairs: int) -> str:
+    if completed_pairs == 0:
+        return _NO_SESSIONS
+    return _format_percentage(numerator, completed_pairs)
+
+
+def _format_percentage(numerator: int, denominator: int) -> str:
+    if denominator == 0:
+        return "0%"
+    return f"{int(numerator / denominator * 100 + 0.5)}%"
+
+
 def _deduplicate_completed_sessions(completed_sessions: pd.DataFrame) -> pd.DataFrame:
     """Return one completed CST session per Matomo visit, bundle, and session."""
-    columns = ["visit_id", "bundle_id", "session_id", "user_id"]
     if completed_sessions.empty:
-        return pd.DataFrame(columns=columns)
+        result = completed_sessions.copy()
+        for column in ("visit_id", "bundle_id", "session_id", "user_id"):
+            if column not in result:
+                result[column] = pd.Series(dtype="object")
+        return result
     return completed_sessions.drop_duplicates(
         subset=["visit_id", "bundle_id", "session_id"]
     )
+
+
+def build_bundle_progression(
+    bundle_configurations: pd.DataFrame,
+    completed_sessions: pd.DataFrame,
+    as_of_date: date | None = None,
+) -> pd.DataFrame:
+    """
+    Build configured-session progression for each bundle.
+
+    Completion events must come from the deduplicated Completed Sessions metric.
+    Repeated deliveries remain valid completed-session instances, but each
+    configured session contributes at most once to bundle progression.
+    """
+    columns = [
+        "organisation_name",
+        "bundle_name",
+        "bundle_id",
+        "completed_configured_sessions",
+        "total_configured_sessions",
+        "progress",
+        "status",
+        "days_since_last_completion",
+        "avg_days_between_completions",
+    ]
+    if bundle_configurations.empty:
+        return pd.DataFrame(columns=columns)
+
+    completions = completed_sessions.copy()
+    if completions.empty:
+        completions = pd.DataFrame(
+            columns=["visit_id", "bundle_id", "session_id", "completion_date"]
+        )
+    else:
+        completions = _deduplicate_completed_sessions(completions)
+        completions["bundle_id"] = completions["bundle_id"].astype(str)
+        completions["session_id"] = completions["session_id"].astype(str)
+        completions["completion_date"] = pd.to_datetime(
+            completions["completion_date"], errors="coerce"
+        ).dt.normalize()
+
+    reference_date = pd.Timestamp(as_of_date or date.today())
+    records = []
+    for bundle in bundle_configurations.to_dict("records"):
+        configured_ids = [
+            str(session_id)
+            for session_id in (bundle.get("configured_session_ids") or [])
+            if session_id is not None
+        ]
+        configured_ids = list(dict.fromkeys(configured_ids))
+        configured_set = set(configured_ids)
+        bundle_id = str(bundle["bundle_id"])
+        bundle_completions = completions[
+            (completions["bundle_id"] == bundle_id)
+            & completions["session_id"].isin(configured_set)
+        ]
+        completed_count = bundle_completions["session_id"].nunique()
+        first_completions = (
+            bundle_completions.dropna(subset=["completion_date"])
+            .groupby("session_id", as_index=False)["completion_date"]
+            .min()
+            .sort_values("completion_date")
+        )
+
+        total_count = len(configured_ids)
+        last_completion = (
+            first_completions["completion_date"].max()
+            if completed_count
+            else pd.NaT
+        )
+        days_since = (
+            max(0, int((reference_date - last_completion).days))
+            if pd.notna(last_completion)
+            else pd.NA
+        )
+        cadence = (
+            first_completions["completion_date"].diff().dt.total_seconds().div(86400).mean()
+            if completed_count >= 2
+            else float("nan")
+        )
+
+        if total_count == 0:
+            status = "No configured sessions"
+        elif completed_count >= total_count:
+            status = "Complete"
+        elif completed_count == 0:
+            status = "Not started"
+        elif pd.notna(days_since) and days_since >= 60:
+            status = "Stalled 60+ days"
+        elif pd.notna(days_since) and days_since >= 30:
+            status = "Stalled 30+ days"
+        else:
+            status = "In progress"
+
+        records.append(
+            {
+                "organisation_name": bundle["organisation_name"],
+                "bundle_name": bundle["bundle_name"],
+                "bundle_id": bundle_id,
+                "completed_configured_sessions": completed_count,
+                "total_configured_sessions": total_count,
+                "progress": f"{completed_count} / {total_count}",
+                "status": status,
+                "days_since_last_completion": days_since,
+                "avg_days_between_completions": (
+                    round(float(cadence), 1) if pd.notna(cadence) else float("nan")
+                ),
+            }
+        )
+
+    result = pd.DataFrame(records, columns=columns)
+    result["days_since_last_completion"] = result[
+        "days_since_last_completion"
+    ].astype("Int64")
+    return result.sort_values(
+        ["organisation_name", "status", "bundle_name", "bundle_id"]
+    ).reset_index(drop=True)
+
+
+def add_bundle_progression_to_org_summary(
+    org_summary: pd.DataFrame,
+    bundle_progression: pd.DataFrame,
+) -> pd.DataFrame:
+    """Add the number of fully completed configured programmes to each org."""
+    result = org_summary.copy()
+    if bundle_progression.empty:
+        result["full_programmes"] = 0
+        return result
+
+    full_programmes = (
+        bundle_progression[bundle_progression["status"] == "Complete"]
+        .groupby("organisation_name")
+        .size()
+    )
+    result["full_programmes"] = (
+        result["organisation_name"].map(full_programmes).fillna(0).astype(int)
+    )
+    return result
 
 
 def _build_visit_duration_metrics(visit_durations: pd.DataFrame) -> pd.DataFrame:
@@ -401,6 +736,12 @@ def build_global_summary(
         "total_users": int(org_summary["total_users"].sum()),
         "total_groups_created": int(bundle_counts["total_groups"].sum()) if not bundle_counts.empty else 0,
         "total_completed_sessions": int(org_summary["completed_sessions"].sum()),
+        "total_deliver_selected_sessions": int(
+            org_summary["deliver_selected_sessions"].sum()
+        ) if "deliver_selected_sessions" in org_summary else 0,
+        "total_active_delivery_sessions": int(
+            org_summary["active_delivery_sessions"].sum()
+        ) if "active_delivery_sessions" in org_summary else 0,
         "overall_groups_avg_rating": groups_average,
         "overall_therapists_avg_rating": therapists_average,
     }
