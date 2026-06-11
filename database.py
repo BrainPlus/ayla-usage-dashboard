@@ -153,7 +153,7 @@ def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
             ARRAY(
                 SELECT configured_session->>'id'
                 FROM jsonb_array_elements(
-                    COALESCE(b.configuration->'sessions', '[]'::jsonb)
+                    COALESCE((b.configuration->'sessions')::jsonb, '[]'::jsonb)
                 ) WITH ORDINALITY AS configured(configured_session, session_order)
                 WHERE configured_session->>'id' IS NOT NULL
                 ORDER BY session_order

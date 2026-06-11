@@ -6,6 +6,7 @@
 # Do not apply dimension13 as a source-side Matomo segment.
 
 import io
+import time
 from datetime import date, timedelta
 
 import pandas as pd
@@ -13,6 +14,8 @@ import requests
 import streamlit as st
 
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
+MATOMO_REQUEST_TIMEOUT = (10, 120)
+MATOMO_REQUEST_ATTEMPTS = 3
 _DELIVER_SELECTED_EVENT = "Prepare/Deliver dialog - Deliver Click"
 _ACTIVE_DELIVERY_EVENTS = frozenset(
     {
@@ -47,7 +50,22 @@ def matomo_get(params: dict, expect_csv: bool = False):
     else:
         merged.setdefault("format", "JSON")
 
-    response = requests.get(st.secrets["matomo_url"], params=merged, timeout=60)
+    method = merged.get("method", "unknown method")
+    for attempt in range(1, MATOMO_REQUEST_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                st.secrets["matomo_url"],
+                params=merged,
+                timeout=MATOMO_REQUEST_TIMEOUT,
+            )
+            break
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            if attempt == MATOMO_REQUEST_ATTEMPTS:
+                raise type(exc)(
+                    f"Matomo {method} failed after {MATOMO_REQUEST_ATTEMPTS} attempts: {exc}"
+                ) from exc
+            time.sleep(2 ** (attempt - 1))
+
     response.raise_for_status()
 
     if expect_csv:

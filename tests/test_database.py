@@ -176,7 +176,7 @@ def test_get_bundle_configurations_reads_ordered_session_ids_without_select_star
     database.get_bundle_configurations("eu")
 
     assert "b.id::text AS bundle_id" in captured["sql"]
-    assert "b.configuration->'sessions'" in captured["sql"]
+    assert "(b.configuration->'sessions')::jsonb" in captured["sql"]
     assert "jsonb_array_elements" in captured["sql"]
     assert "'[]'::jsonb" in captured["sql"]
     assert "configured_session->>'id'" in captured["sql"]

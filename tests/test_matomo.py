@@ -3,12 +3,69 @@ from types import ModuleType
 
 import pandas as pd
 import pytest
+import requests
 
 streamlit_stub = ModuleType("streamlit")
 streamlit_stub.secrets = {}
 sys.modules.setdefault("streamlit", streamlit_stub)
 
 import matomo
+
+
+def test_matomo_get_retries_transient_timeout(monkeypatch) -> None:
+    response = type(
+        "Response",
+        (),
+        {
+            "raise_for_status": lambda self: None,
+            "json": lambda self: [{"ok": True}],
+        },
+    )()
+    calls = []
+    sleeps = []
+
+    def fake_get(url, params, timeout):
+        calls.append((url, params, timeout))
+        if len(calls) == 1:
+            raise requests.exceptions.ReadTimeout("slow response")
+        return response
+
+    matomo.st.secrets = {
+        "matomo_url": "https://example.test",
+        "matomo_site_id": "4",
+        "matomo_token": "secret",
+    }
+    monkeypatch.setattr(matomo.requests, "get", fake_get)
+    monkeypatch.setattr(matomo.time, "sleep", sleeps.append)
+
+    result = matomo.matomo_get({"method": "Example.get"})
+
+    assert result == [{"ok": True}]
+    assert len(calls) == 2
+    assert calls[0][2] == (10, 120)
+    assert sleeps == [1]
+
+
+def test_matomo_get_identifies_method_after_transient_retries(monkeypatch) -> None:
+    matomo.st.secrets = {
+        "matomo_url": "https://example.test",
+        "matomo_site_id": "4",
+        "matomo_token": "secret",
+    }
+    monkeypatch.setattr(
+        matomo.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            requests.exceptions.ReadTimeout("slow response")
+        ),
+    )
+    monkeypatch.setattr(matomo.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(
+        requests.exceptions.ReadTimeout,
+        match=r"Matomo Example\.get failed after 3 attempts",
+    ):
+        matomo.matomo_get({"method": "Example.get"})
 
 
 def test_active_delivery_allowlist_matches_issue_28() -> None:
