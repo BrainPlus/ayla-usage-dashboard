@@ -6,13 +6,17 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
+
+_DB_CACHE_TTL = 1800  # 30 minutes — limits dashboard load on the shared production connection pool
 
 
 @st.cache_resource
 def get_engine(region: str):
     """
     Returns a SQLAlchemy engine for the given region using st.secrets[region].
-    Cached as a shared resource so only one connection pool exists per region.
+    Cached as a shared resource, but configured without a persistent connection
+    pool so completed queries immediately release their PostgreSQL connection.
 
     Args:
         region: "uk" or "eu"
@@ -25,7 +29,7 @@ def get_engine(region: str):
         f"postgresql+psycopg2://{cfg['db_user']}:{cfg['db_password']}"
         f"@{cfg['db_host']}:{cfg['db_port']}/{cfg['db_name']}"
     )
-    return create_engine(url)
+    return create_engine(url, poolclass=NullPool)
 
 
 def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | None]:
@@ -36,6 +40,7 @@ def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | Non
     return "", None
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_organisations(region: str) -> pd.DataFrame:
     """Returns organisations with users in the selected region, ordered by name."""
     sql = text("""
@@ -57,6 +62,7 @@ def get_organisations(region: str) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def load_users_and_orgs(region: str, org_id=None) -> pd.DataFrame:
     """
     Loads all users joined with their organisation name.
@@ -87,6 +93,7 @@ def load_users_and_orgs(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_org_user_counts(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts users per organisation.
@@ -111,6 +118,7 @@ def get_org_user_counts(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     """
     Counts the number of groups (bundles) created per organisation.
@@ -138,6 +146,7 @@ def get_bundle_counts_per_org(region: str, org_id=None) -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
     """
     Loads each bundle's ordered configured session IDs and creation date.
@@ -174,6 +183,7 @@ def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
         return pd.read_sql(sql, conn, params=params)
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_monthly_bundle_creations(
     region: str,
     start_date: date,
@@ -211,6 +221,7 @@ def get_monthly_bundle_creations(
         return pd.read_sql(sql, conn, params=params)
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_bundle_filter_breakdown(
     region: str,
     start_date: date,
@@ -268,6 +279,7 @@ def get_bundle_filter_breakdown(
         return pd.read_sql(sql, conn, params=params)
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_star_ratings_by_org(
     region: str,
     start_date: date,
@@ -313,6 +325,7 @@ def get_star_ratings_by_org(
     return df
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_feedback_submissions(
     region: str,
     start_date: date,
@@ -350,6 +363,7 @@ def get_feedback_submissions(
         return pd.read_sql(sql, conn, params=params)
 
 
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_monthly_star_ratings(
     region: str,
     start_date: date,
@@ -380,7 +394,7 @@ def get_monthly_star_ratings(
             TO_CHAR(fa.created_at, 'YYYY-MM')                AS month,
             COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
             fq.target,
-            question->>'question_en'                         AS question_label,
+            COALESCE(question->>'question_en', 'Unknown Question') AS question_label,
             AVG((ans->>'answer')::numeric)                   AS avg_rating,
             COUNT(*)                                         AS total_responses
         FROM feedback_answers fa
@@ -388,14 +402,18 @@ def get_monthly_star_ratings(
         JOIN users u           ON u.id  = fa.user_id
         LEFT JOIN organisations o  ON o.id  = u.organisation_id
         JOIN feedback_questions fq ON fq.id = fa.feedback_question_id
-        JOIN LATERAL jsonb_array_elements(fq.questions->'questions') AS question
+        LEFT JOIN LATERAL jsonb_array_elements(fq.questions->'questions') AS question
             ON question->>'id' = ans->>'questionId'
         WHERE fa.created_at >= :start AND fa.created_at < :end_exclusive
         {filter_sql}
-        GROUP BY month, COALESCE(o.name, 'Unassigned / No organisation'),
-                 fq.target, question_label
-        ORDER BY month, COALESCE(o.name, 'Unassigned / No organisation'),
-                 fq.target, question_label
+        GROUP BY TO_CHAR(fa.created_at, 'YYYY-MM'),
+                 COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target,
+                 COALESCE(question->>'question_en', 'Unknown Question')
+        ORDER BY TO_CHAR(fa.created_at, 'YYYY-MM'),
+                 COALESCE(o.name, 'Unassigned / No organisation'),
+                 fq.target,
+                 COALESCE(question->>'question_en', 'Unknown Question')
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn, params=params)

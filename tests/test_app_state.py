@@ -28,6 +28,7 @@ def _import_app(monkeypatch):
     streamlit.markdown = lambda *args, **kwargs: None
     streamlit.date_input = lambda label, value, **kwargs: value
     streamlit.button = lambda *args, **kwargs: False
+    streamlit.checkbox = lambda *args, **kwargs: False
     streamlit.caption = lambda text, **kwargs: streamlit._captions.append(text)
     streamlit.tabs = lambda names: [_Context() for _ in names]
     streamlit.info = lambda *args, **kwargs: None
@@ -114,7 +115,6 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
     assert set(app._SECTION_HELP) == {
         "overview",
         "logins_by_organisation",
-        "login_form_outcomes",
         "delivery_funnel",
         "monthly_bundle_creations",
         "bundle_filter_breakdown",
@@ -149,6 +149,24 @@ def test_bundle_history_date_range_starts_at_earliest_bundle(monkeypatch) -> Non
     assert app._bundle_history_date_range(
         pd.DataFrame(), date(2026, 6, 10)
     ) == "2026-06-10,2026-06-10"
+
+
+def test_format_elapsed(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+
+    assert app._format_elapsed(-1) == "0s"
+    assert app._format_elapsed(9.9) == "9s"
+    assert app._format_elapsed(65) == "1m 05s"
+
+
+def test_skipped_last_login_is_explicit(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    db_users = pd.DataFrame([{"user_id": 1}, {"user_id": "u2"}])
+
+    assert app._skipped_last_login(db_users).to_dict("records") == [
+        {"user_id": "1", "last_login_date": "Not fetched"},
+        {"user_id": "u2", "last_login_date": "Not fetched"},
+    ]
 
 
 def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypatch) -> None:
@@ -215,14 +233,6 @@ def test_logins_by_organisation_only_shows_for_all_organisations(monkeypatch) ->
     assert app._show_logins_by_organisation(None)
     assert not app._show_logins_by_organisation(196)
     assert not app._show_logins_by_organisation("unassigned")
-
-
-def test_login_form_outcomes_only_show_for_all_organisations(monkeypatch) -> None:
-    app = _import_app(monkeypatch)
-
-    assert app._show_login_form_outcomes(None)
-    assert not app._show_login_form_outcomes(196)
-    assert not app._show_login_form_outcomes("unassigned")
 
 
 def test_user_organisation_filter_only_shows_for_all_organisations(monkeypatch) -> None:

@@ -41,15 +41,19 @@ The dashboard pulls from two independent sources — Matomo (usage analytics) an
 
 ### Step-by-step pull sequence (triggered by "Pull Data")
 
-1. **DB queries** (fast, ~1–2s) — `database.py` runs seven SQL queries against the selected region's PostgreSQL database: users+orgs, user counts per org, bundle counts per org, monthly bundle creations, bundle filter breakdown, star ratings by org, monthly star ratings.
+1. **DB queries** — `database.py` runs the PostgreSQL queries sequentially to stay within the production database's limited connection slots.
 
-2. **Matomo bulk queries** (medium, ~5–15s, cached 1h) — `matomo.py` fetches shared-instance Matomo data for the selected reporting period. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
+2. **Matomo bulk queries** (medium, cached 1h) — `matomo.py` fetches the full action-level Live visit payload once for the selected reporting period and, when required for bundle progression, once for bundle history. All selected-period metrics derive from the shared payload rather than downloading the same visits independently. Before any raw Matomo rows are aggregated directly, `app.py` restricts them to user IDs loaded from the selected region's database.
 
-3. **Last login per user** (slow, ~1–5 min) — one `Live.getLastVisitsDetails` call per user, sequentially. This is the bottleneck. A progress bar is shown. Not cached because caching would skip the progress callback.
+3. **Last login per user** (slow, ~30–60 s for 100 users) — one `Live.getLastVisitsDetails` call per user, parallelised with up to 10 concurrent workers. Progress is collected via `as_completed` on the calling thread so Streamlit UI updates stay on the main thread. Not cached because caching would skip the progress callback.
 
 4. **Avg session duration** (fast, 1 API call, cached 1h) — a single `Live.getLastVisitsDetails` call; duration is extracted and averaged per user in pandas.
 
 5. **Merge** — `merger.py` left-joins all Matomo DataFrames onto the DB user list and aggregates up to org and global level.
+
+The sidebar can skip the full-history bundle-progression pull and/or the per-user
+last-login lookup. Skipped history-dependent fields are marked unavailable rather
+than being reported as zero or not started.
 
 ### Regional boundary for raw Matomo aggregates
 
