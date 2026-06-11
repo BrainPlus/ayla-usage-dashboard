@@ -123,7 +123,9 @@ def test_database_queries_apply_organisation_filter(
         assert expected_filter in captured["sql"]
 
 
-def test_get_organisations_orders_by_name(monkeypatch) -> None:
+def test_get_organisations_only_returns_organisations_with_regional_users(
+    monkeypatch,
+) -> None:
     captured = {}
 
     def fake_read_sql(sql, conn):
@@ -137,9 +139,12 @@ def test_get_organisations_orders_by_name(monkeypatch) -> None:
 
     result = database.get_organisations("eu")
 
-    assert "id   AS organisation_id" in captured["sql"]
-    assert "name AS organisation_name" in captured["sql"]
-    assert "ORDER BY name" in captured["sql"]
+    assert "o.id   AS organisation_id" in captured["sql"]
+    assert "o.name AS organisation_name" in captured["sql"]
+    assert "FROM organisations o" in captured["sql"]
+    assert "FROM users u" in captured["sql"]
+    assert "u.organisation_id = o.id" in captured["sql"]
+    assert "ORDER BY o.name" in captured["sql"]
     assert result.iloc[0]["organisation_id"] == 196
 
 

@@ -16,6 +16,7 @@ import streamlit as st
 REAL_SESSION_MIN_DURATION_SECONDS = 20 * 60
 MATOMO_REQUEST_TIMEOUT = (10, 120)
 MATOMO_REQUEST_ATTEMPTS = 3
+LIVE_VISIT_PAGE_SIZE = 500
 _DELIVER_SELECTED_EVENT = "Prepare/Deliver dialog - Deliver Click"
 _ACTIVE_DELIVERY_EVENTS = frozenset(
     {
@@ -73,7 +74,7 @@ def matomo_get(params: dict, expect_csv: bool = False):
     return response.json()
 
 
-def _fetch_all_live_visits(base_params: dict, page_size: int = 5000) -> list:
+def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_SIZE) -> list:
     """Paginate Live.getLastVisitsDetails until all visits in the date range are fetched."""
     all_visits: list = []
     offset = 0
@@ -442,7 +443,7 @@ def get_activity_usage_by_id(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -524,7 +525,7 @@ def get_step_completion_depth(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -615,7 +616,7 @@ def get_talking_point_engagement(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -708,7 +709,7 @@ def get_media_usage(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:
@@ -801,7 +802,7 @@ def get_engagement_events(
             "period": "range",
             "date": date_range,
         },
-        page_size=10000,
+        page_size=LIVE_VISIT_PAGE_SIZE,
     )
 
     if not data:

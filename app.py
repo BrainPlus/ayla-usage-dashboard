@@ -623,11 +623,6 @@ def _cached_engagement_events(
     return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
 
 
-@st.cache_data(ttl=3600)
-def _cached_organisations(region: str) -> pd.DataFrame:
-    return database.get_organisations(region)
-
-
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -635,7 +630,7 @@ with st.sidebar:
 
     region = st.selectbox("Region", ["eu", "uk"])
 
-    orgs_df = _cached_organisations(region)
+    orgs_df = database.get_organisations(region)
     org_options = (
         ["All organisations"]
         + orgs_df["organisation_name"].tolist()

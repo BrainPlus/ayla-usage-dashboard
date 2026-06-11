@@ -12,6 +12,10 @@ sys.modules.setdefault("streamlit", streamlit_stub)
 import matomo
 
 
+def test_full_action_live_visit_page_size_is_bounded() -> None:
+    assert matomo.LIVE_VISIT_PAGE_SIZE <= 500
+
+
 def test_matomo_get_retries_transient_timeout(monkeypatch) -> None:
     response = type(
         "Response",
@@ -669,6 +673,20 @@ def test_fetch_single_page_less_than_page_size(monkeypatch) -> None:
     result = matomo._fetch_all_live_visits({"method": "Live.getLastVisitsDetails"}, page_size=5)
     assert len(result) == 3
     assert result[0]["userId"] == "u0"
+
+
+def test_fetch_all_live_visits_uses_bounded_default_page_size(monkeypatch) -> None:
+    captured = {}
+
+    def fake_get(params: dict) -> list:
+        captured.update(params)
+        return []
+
+    monkeypatch.setattr(matomo, "matomo_get", fake_get)
+
+    matomo._fetch_all_live_visits({"method": "Live.getLastVisitsDetails"})
+
+    assert captured["filter_limit"] == matomo.LIVE_VISIT_PAGE_SIZE
 
 
 def test_fetch_multiple_pages_concatenated(monkeypatch) -> None:

@@ -37,13 +37,18 @@ def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | Non
 
 
 def get_organisations(region: str) -> pd.DataFrame:
-    """Returns all organisations ordered by name."""
+    """Returns organisations with users in the selected region, ordered by name."""
     sql = text("""
         SELECT
-            id   AS organisation_id,
-            name AS organisation_name
-        FROM organisations
-        ORDER BY name
+            o.id   AS organisation_id,
+            o.name AS organisation_name
+        FROM organisations o
+        WHERE EXISTS (
+            SELECT 1
+            FROM users u
+            WHERE u.organisation_id = o.id
+        )
+        ORDER BY o.name
     """)
     with get_engine(region).connect() as conn:
         df = pd.read_sql(sql, conn)
