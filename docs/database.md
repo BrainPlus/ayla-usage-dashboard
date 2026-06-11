@@ -15,7 +15,7 @@ All query functions accept a `region` parameter (`"uk"` or `"eu"`) and return a 
 
 **Returns:** `sqlalchemy.engine.Engine` using the `postgresql+psycopg2` dialect. The engine is lightweight and does not open a connection until `.connect()` is called.
 
-**Notes:** Connection URL is constructed as `postgresql+psycopg2://user:password@host:port/dbname`. All five credential keys (`db_host`, `db_port`, `db_name`, `db_user`, `db_password`) are read from `st.secrets[region]`.
+**Notes:** Connection URL is constructed as `postgresql+psycopg2://user:password@host:port/dbname`. All five credential keys (`db_host`, `db_port`, `db_name`, `db_user`, `db_password`) are read from `st.secrets[region]`. The cached engine uses SQLAlchemy `NullPool`, so each query closes its physical PostgreSQL connection when the query context exits instead of retaining idle server slots across Streamlit reruns or region changes.
 
 ---
 

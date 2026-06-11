@@ -4,6 +4,7 @@ import importlib
 import inspect
 import streamlit as st
 from datetime import date, timedelta
+from time import monotonic
 
 import pandas as pd
 
@@ -29,7 +30,6 @@ _REPORT_DATA_KEYS = (
     "user_detail",
     "org_summary",
     "global_summary",
-    "login_form_outcomes",
     "delivery_funnel",
     "monthly_ratings",
     "monthly_bundle_creations",
@@ -49,6 +49,8 @@ _REPORT_DATA_KEYS = (
     "fetched_org_id",
     "fetched_org_name",
     "fetched_date_range",
+    "fetched_skip_last_login",
+    "fetched_skip_bundle_history",
 )
 
 _OVERVIEW_METRICS = (
@@ -96,11 +98,6 @@ _SECTION_HELP = {
     "logins_by_organisation": (
         "Number of Matomo visits, grouped by organisation, during the selected date "
         "range. A visit is treated as a login/browser session."
-    ),
-    "login_form_outcomes": (
-        "Login form events during the selected date range. Successful submissions "
-        "are restricted to identified users in the selected region. Attempts and "
-        "failures happen before authentication and therefore cover all regions."
     ),
     "delivery_funnel": (
         "Progression from selecting Deliver, through at least one high-confidence "
@@ -198,10 +195,6 @@ def _overview_metrics(fetched_org_id):
 
 
 def _show_logins_by_organisation(fetched_org_id) -> bool:
-    return fetched_org_id is None
-
-
-def _show_login_form_outcomes(fetched_org_id) -> bool:
     return fetched_org_id is None
 
 
@@ -385,16 +378,6 @@ def _get_activity_usage_by_id(
     return matomo.get_activity_usage_by_id(date_range)
 
 
-def _get_login_form_outcomes(
-    date_range: str,
-    allowed_user_ids: frozenset[str],
-):
-    global matomo
-    if not hasattr(matomo, "get_login_form_outcomes"):
-        matomo = importlib.reload(matomo)
-    return matomo.get_login_form_outcomes(date_range, allowed_user_ids)
-
-
 def _get_delivery_funnel_instances(date_range: str, org_id):
     global matomo
     if not hasattr(matomo, "get_delivery_funnel_instances"):
@@ -472,6 +455,8 @@ def _should_clear_report(
     current_region: str,
     current_org_id,
     current_date_range: str,
+    current_skip_last_login: bool = False,
+    current_skip_bundle_history: bool = False,
 ) -> bool:
     if not any(
         key in session_state
@@ -481,10 +466,14 @@ def _should_clear_report(
     fetched_region = session_state.get("fetched_region")
     fetched_org_id = session_state.get("fetched_org_id")
     fetched_date_range = session_state.get("fetched_date_range")
+    fetched_skip_last_login = session_state.get("fetched_skip_last_login", False)
+    fetched_skip_bundle_history = session_state.get("fetched_skip_bundle_history", False)
     return (
         fetched_region != current_region
         or fetched_org_id != current_org_id
         or fetched_date_range != current_date_range
+        or fetched_skip_last_login != current_skip_last_login
+        or fetched_skip_bundle_history != current_skip_bundle_history
     )
 
 
@@ -522,6 +511,19 @@ def _bundle_history_date_range(
     return f"{start_date},{as_of_date}"
 
 
+def _format_elapsed(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes}m {seconds:02d}s" if minutes else f"{seconds}s"
+
+
+def _skipped_last_login(db_users: pd.DataFrame) -> pd.DataFrame:
+    result = db_users.loc[:, ["user_id"]].copy()
+    result["user_id"] = result["user_id"].astype(str)
+    result["last_login_date"] = "Not fetched"
+    return result
+
+
 # ── cached Matomo wrappers ────────────────────────────────────────────────────
 # get_last_login_per_user is intentionally not cached: it drives a live progress bar.
 
@@ -531,22 +533,11 @@ def _cached_logins(date_range: str):
 
 
 @st.cache_data(ttl=3600)
-def _cached_login_form_outcomes(
-    date_range: str,
-    region: str,
-    allowed_user_ids: frozenset[str],
-):
-    return _get_login_form_outcomes(date_range, allowed_user_ids)
-
-
-@st.cache_data(ttl=3600)
-def _cached_delivery_funnel(date_range: str, region: str, org_id):
-    return _get_delivery_funnel_instances(date_range, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_activity_completions(date_range: str, region: str, org_id):
-    return matomo.get_activity_completions_per_user(date_range, org_id=org_id)
+def _cached_live_visits(date_range: str):
+    global matomo
+    if not hasattr(matomo, "get_live_visits"):
+        matomo = importlib.reload(matomo)
+    return matomo.get_live_visits(date_range)
 
 
 @st.cache_data(ttl=3600)
@@ -561,66 +552,6 @@ def _cached_activity_catalogue() -> dict:
         return squidex.get_activity_catalogue(base_url, project, token)
     except Exception:
         return {}
-
-
-@st.cache_data(ttl=3600)
-def _cached_activity_usage(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return _get_activity_usage_by_id(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_step_completion_depth(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_step_completion_depth(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_visit_durations(date_range: str, region: str, org_id):
-    return matomo.get_visit_durations(date_range, org_id=org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_visit_dates(date_range: str, region: str, org_id):
-    return matomo.get_visit_dates(date_range, org_id=org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_talking_point_engagement(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_talking_point_engagement(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_media_usage(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_media_usage(date_range, allowed_user_ids, org_id)
-
-
-@st.cache_data(ttl=3600)
-def _cached_engagement_events(
-    date_range: str,
-    region: str,
-    org_id,
-    allowed_user_ids: frozenset[str] | None,
-):
-    return matomo.get_engagement_events(date_range, allowed_user_ids, org_id)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -656,8 +587,24 @@ with st.sidebar:
     start_date = st.date_input("From", today - timedelta(days=90), key="start_date")
     end_date = st.date_input("To", today, key="end_date")
 
+    skip_last_login = st.checkbox(
+        "Skip last login lookup",
+        help=(
+            "Skips one Matomo request per user. Last login fields will show "
+            "'Not fetched'. This usually saves around two minutes for all EU users."
+        ),
+    )
+    skip_bundle_history = st.checkbox(
+        "Skip bundle history",
+        help=(
+            "Skips the full-history Matomo and bundle-configuration queries used for "
+            "bundle progression, completed-programme counts, and days since the last "
+            "completed session. Those fields will show as unavailable."
+        ),
+    )
+
     pull = st.button("Pull Data", type="primary")
-    st.caption("Pulling last login data may take a few minutes")
+    st.caption("Use the skip options above for a faster selected-period-only pull.")
 
 if start_date > end_date:
     st.error("'From' date must be on or before 'To' date.")
@@ -670,6 +617,8 @@ if _should_clear_report(
     region,
     selected_org_id,
     date_range,
+    skip_last_login,
+    skip_bundle_history,
 ):
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)
@@ -677,55 +626,96 @@ if _should_clear_report(
 # ── data fetching ─────────────────────────────────────────────────────────────
 
 if pull:
+    pull_started = monotonic()
+    pull_status = st.status("Starting data pull...", expanded=True)
+    pull_progress = st.progress(0, text="Starting data pull...")
+
+    def _update_pull_progress(value: float, label: str) -> None:
+        elapsed = _format_elapsed(monotonic() - pull_started)
+        text = f"{label} · elapsed {elapsed}"
+        pull_progress.progress(value, text=text)
+
     try:
-        # Step 1 — DB queries (fast)
-        with st.spinner("Querying database..."):
-            db_users = database.load_users_and_orgs(
-                region,
-                org_id=selected_org_id,
-            )
+        # Step 1 — DB queries. Keep these sequential to avoid exhausting the
+        # production database's limited connection slots.
+        _update_pull_progress(0.02, "Querying database")
+        with st.spinner("Querying database...", show_time=True):
+            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
             org_user_counts = database.get_org_user_counts(
                 region, org_id=selected_org_id
             )
             bundle_counts = database.get_bundle_counts_per_org(
                 region, org_id=selected_org_id
             )
-            bundle_configurations = database.get_bundle_configurations(
-                region, org_id=selected_org_id
-            )
-            bundle_history_date_range = _bundle_history_date_range(
-                bundle_configurations, today
+            bundle_configurations = (
+                pd.DataFrame()
+                if skip_bundle_history
+                else database.get_bundle_configurations(
+                    region, org_id=selected_org_id
+                )
             )
             monthly_bundle_creations = _get_monthly_bundle_creations(
-                region, start_date, end_date, org_id=selected_org_id,
+                region, start_date, end_date, org_id=selected_org_id
             )
             bundle_filter_breakdown = _get_bundle_filter_breakdown(
-                region, start_date, end_date, org_id=selected_org_id,
+                region, start_date, end_date, org_id=selected_org_id
             )
             star_ratings = database.get_star_ratings_by_org(
-                region, start_date, end_date, org_id=selected_org_id,
+                region, start_date, end_date, org_id=selected_org_id
             )
             feedback_submissions = database.get_feedback_submissions(
-                region, start_date, end_date, org_id=selected_org_id,
+                region, start_date, end_date, org_id=selected_org_id
             )
             monthly_ratings = database.get_monthly_star_ratings(
-                region, start_date, end_date, org_id=selected_org_id,
+                region, start_date, end_date, org_id=selected_org_id
+            )
+            bundle_history_date_range = (
+                None
+                if skip_bundle_history
+                else _bundle_history_date_range(bundle_configurations, today)
             )
             database_user_ids = _database_user_ids(db_users)
+        _update_pull_progress(0.12, "Database queries complete")
 
         # Step 2 — Matomo queries (cached after first run)
-        with st.spinner("Fetching Matomo analytics..."):
+        with st.spinner("Fetching Matomo analytics...", show_time=True):
+            _update_pull_progress(0.15, "Fetching login totals")
             logins = _cached_logins(date_range)
-            login_form_outcomes = (
-                _cached_login_form_outcomes(date_range, region, database_user_ids)
-                if selected_org_id is None
-                else None
+            _update_pull_progress(0.20, "Fetching selected-period Matomo visits")
+            live_visits = _cached_live_visits(date_range)
+            if skip_bundle_history:
+                _update_pull_progress(0.62, "Bundle history skipped")
+                bundle_history_visits = []
+            else:
+                _update_pull_progress(
+                    0.42, "Fetching bundle history (usually the longest stage)"
+                )
+                bundle_history_visits = (
+                    live_visits
+                    if bundle_history_date_range == date_range
+                    else _cached_live_visits(bundle_history_date_range)
+                )
+            _update_pull_progress(0.62, "Calculating Matomo metrics")
+            delivery_funnel = matomo.get_delivery_funnel_instances(
+                date_range, org_id=selected_org_id, visits=live_visits
             )
-            delivery_funnel = _cached_delivery_funnel(
-                date_range, region, selected_org_id
-            )
-            bundle_history_funnel = _cached_delivery_funnel(
-                bundle_history_date_range, region, selected_org_id
+            bundle_history_funnel = (
+                matomo.get_delivery_funnel_instances(
+                    bundle_history_date_range,
+                    org_id=selected_org_id,
+                    visits=bundle_history_visits,
+                )
+                if not skip_bundle_history
+                else pd.DataFrame(
+                    columns=[
+                        "visit_id",
+                        "bundle_id",
+                        "session_id",
+                        "user_id",
+                        "completed_session",
+                        "completed_session_date",
+                    ]
+                )
             )
             completed_sessions = delivery_funnel.loc[
                 delivery_funnel["completed_session"],
@@ -743,29 +733,47 @@ if pull:
             ].rename(columns={"completed_session_date": "completion_date"}).reset_index(
                 drop=True
             )
-            activity_completions = _cached_activity_completions(
-                date_range, region, selected_org_id
+            activity_completions = matomo.get_activity_completions_per_user(
+                date_range, org_id=selected_org_id, visits=live_visits
             )
             activity_catalogue = _cached_activity_catalogue()
-            activity_usage = _cached_activity_usage(
-                date_range, region, selected_org_id, database_user_ids
+            activity_usage = matomo.get_activity_usage_by_id(
+                date_range,
+                database_user_ids,
+                selected_org_id,
+                visits=live_visits,
             )
-            step_completion_depth = _cached_step_completion_depth(
-                date_range, region, selected_org_id, database_user_ids
+            step_completion_depth = matomo.get_step_completion_depth(
+                date_range,
+                database_user_ids,
+                selected_org_id,
+                visits=live_visits,
             )
-            visit_durations = _cached_visit_durations(
-                date_range, region, selected_org_id
+            visit_durations = matomo.get_visit_durations(
+                date_range, org_id=selected_org_id, visits=live_visits
             )
-            visit_dates = _cached_visit_dates(date_range, region, selected_org_id)
-            talking_point_engagement = _cached_talking_point_engagement(
-                date_range, region, selected_org_id, database_user_ids
+            visit_dates = matomo.get_visit_dates(
+                date_range, org_id=selected_org_id, visits=live_visits
             )
-            media_usage = _cached_media_usage(
-                date_range, region, selected_org_id, database_user_ids
+            talking_point_engagement = matomo.get_talking_point_engagement(
+                date_range,
+                database_user_ids,
+                selected_org_id,
+                visits=live_visits,
             )
-            engagement_events = _cached_engagement_events(
-                date_range, region, selected_org_id, database_user_ids
+            media_usage = matomo.get_media_usage(
+                date_range,
+                database_user_ids,
+                selected_org_id,
+                visits=live_visits,
             )
+            engagement_events = matomo.get_engagement_events(
+                date_range,
+                database_user_ids,
+                selected_org_id,
+                visits=live_visits,
+            )
+        _update_pull_progress(0.72, "Matomo analytics complete")
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
         logins = _filter_to_database_users(logins, database_user_ids)
@@ -794,44 +802,67 @@ if pull:
         )
 
         # Step 3 — Last login per user (slowest — show progress)
-        all_user_ids = _last_login_user_ids(db_users)
+        if skip_last_login:
+            last_login = _skipped_last_login(db_users)
+            _update_pull_progress(0.94, "Last login lookup skipped")
+        else:
+            all_user_ids = _last_login_user_ids(db_users)
 
-        with st.status("Fetching last login dates...", expanded=True) as status:
-            progress_bar = st.progress(0)
+            with st.status("Fetching last login dates...", expanded=True) as status:
+                progress_bar = st.progress(0)
+                _update_pull_progress(0.74, "Fetching last login dates")
 
-            def _progress(current: int, total: int) -> None:
-                if total > 0:
-                    progress_bar.progress(current / total, text=f"{current} / {total} users")
+                def _progress(current: int, total: int) -> None:
+                    if total > 0:
+                        progress_bar.progress(
+                            current / total, text=f"{current} / {total} users"
+                        )
+                        overall_value = 0.74 + (current / total * 0.20)
+                        _update_pull_progress(
+                            overall_value,
+                            f"Fetching last login dates ({current} / {total} users)",
+                        )
 
-            last_login = matomo.get_last_login_per_user(all_user_ids, _progress)
-            status.update(
-                label=f"Last login dates fetched ({len(all_user_ids)} users)",
-                state="complete",
-                expanded=False,
-            )
+                last_login = matomo.get_last_login_per_user(all_user_ids, _progress)
+                status.update(
+                    label=f"Last login dates fetched ({len(all_user_ids)} users)",
+                    state="complete",
+                    expanded=False,
+                )
 
         # Step 4 — Build merged DataFrames
-        with st.spinner("Building report..."):
+        _update_pull_progress(0.95, "Building report")
+        with st.spinner("Building report...", show_time=True):
             user_detail = merger.build_user_detail(
                 db_users, logins, last_login, visit_durations, activity_completions,
                 completed_sessions,
             )
-            bundle_progression = merger.build_bundle_progression(
-                bundle_configurations,
-                completed_session_history,
-                as_of_date=today,
+            bundle_progression = (
+                merger.build_bundle_progression(
+                    bundle_configurations,
+                    completed_session_history,
+                    as_of_date=today,
+                )
+                if not skip_bundle_history
+                else pd.DataFrame()
             )
             org_summary = merger.build_org_summary(
                 user_detail, completed_sessions, star_ratings, org_user_counts,
                 visit_durations=visit_durations,
                 delivery_funnel=delivery_funnel,
-                recent_completed_sessions=completed_session_history,
+                recent_completed_sessions=(
+                    completed_session_history if not skip_bundle_history else None
+                ),
                 as_of_date=today,
                 feedback_submissions=feedback_submissions,
             )
-            org_summary = merger.add_bundle_progression_to_org_summary(
-                org_summary, bundle_progression
-            )
+            if skip_bundle_history:
+                org_summary["days_since_last_completed_session"] = "Not fetched"
+                org_summary["full_programmes"] = pd.NA
+            else:
+                org_summary = merger.add_bundle_progression_to_org_summary(
+                    org_summary, bundle_progression
+                )
             global_summary = _build_global_summary(
                 org_summary, bundle_counts, star_ratings
             )
@@ -843,7 +874,6 @@ if pull:
             "user_detail": user_detail,
             "org_summary": org_summary,
             "global_summary": global_summary,
-            "login_form_outcomes": login_form_outcomes,
             "delivery_funnel": delivery_funnel,
             "monthly_ratings": monthly_ratings,
             "monthly_bundle_creations": monthly_bundle_creations,
@@ -863,11 +893,26 @@ if pull:
             "fetched_org_id": selected_org_id,
             "fetched_org_name": selected_org_name,
             "fetched_date_range": date_range,
+            "fetched_skip_last_login": skip_last_login,
+            "fetched_skip_bundle_history": skip_bundle_history,
         })
 
+        elapsed = _format_elapsed(monotonic() - pull_started)
+        pull_progress.progress(1.0, text="")
+        pull_status.update(
+            label=f"Data pull complete · elapsed {elapsed}",
+            state="complete",
+            expanded=False,
+        )
         st.success("Data loaded successfully.")
 
     except Exception as e:
+        elapsed = _format_elapsed(monotonic() - pull_started)
+        pull_status.update(
+            label=f"Data pull failed after {elapsed}",
+            state="error",
+            expanded=True,
+        )
         st.error(f"Error fetching data [{APP_REVISION}]: {e}")
 
 
@@ -942,31 +987,6 @@ else:
                 .sort_values(ascending=False)
             )
             st.bar_chart(chart_data)
-
-        if _show_login_form_outcomes(fetched_org_id):
-            st.markdown(
-                "**Login Form Outcomes**",
-                help=_SECTION_HELP["login_form_outcomes"],
-            )
-            login_form_outcomes = st.session_state.get(
-                "login_form_outcomes",
-                {"attempts": 0, "successes": 0, "failures": 0},
-            )
-            login_cols = st.columns(3)
-            for col, (key, label) in zip(
-                login_cols,
-                (
-                    ("attempts", "Attempts (all regions)"),
-                    ("successes", "Successes (selected region)"),
-                    ("failures", "Failures (all regions)"),
-                ),
-            ):
-                col.metric(label, login_form_outcomes[key])
-            st.caption(
-                "Attempts and failures are pre-authentication events, so they cannot "
-                "be filtered by region or attributed to specific organisations. "
-                "Do not use these counts for organisation-level conclusions."
-            )
 
         if _show_global_bundle_creation_chart(fetched_org_id):
             st.markdown(
@@ -1398,7 +1418,12 @@ else:
             "**Bundle Progression**",
             help=_SECTION_HELP["bundle_progression"],
         )
-        if bundle_progression.empty:
+        if st.session_state.get("fetched_skip_bundle_history"):
+            st.info(
+                "Bundle history was skipped. Pull data again without "
+                "**Skip bundle history** to view progression."
+            )
+        elif bundle_progression.empty:
             st.info("No bundles are available for the selected organisation scope.")
         else:
             st.dataframe(

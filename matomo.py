@@ -5,6 +5,7 @@
 # 0 results). Python-level filtering via _extract_dimension is the authoritative filter.
 # Do not apply dimension13 as a source-side Matomo segment.
 
+import concurrent.futures
 import io
 import time
 from datetime import date, timedelta
@@ -94,6 +95,22 @@ def _fetch_all_live_visits(base_params: dict, page_size: int = LIVE_VISIT_PAGE_S
     return all_visits
 
 
+def get_live_visits(date_range: str) -> list[dict]:
+    """Fetch the full action-level Live visit payload for reuse across metrics."""
+    return _fetch_all_live_visits(
+        {
+            "method": "Live.getLastVisitsDetails",
+            "period": "range",
+            "date": date_range,
+        },
+        page_size=LIVE_VISIT_PAGE_SIZE,
+    )
+
+
+def _live_visits(date_range: str, visits: list[dict] | None) -> list[dict]:
+    return visits if visits is not None else get_live_visits(date_range)
+
+
 def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     """
     Fetches unique user logins within a date range.
@@ -126,53 +143,13 @@ def get_logins_by_date_range(date_range: str) -> pd.DataFrame:
     return df[["user_id", "visits"]].reset_index(drop=True)
 
 
-def get_login_form_outcomes(
-    date_range: str,
-    allowed_user_ids: frozenset[str],
-) -> dict[str, int]:
-    """
-    Count login form attempts, successes, and failures in a date range.
-
-    Attempts and failures happen before authentication, so they cannot be
-    reliably filtered by region. Successes are restricted to identified users
-    in the selected region.
-    """
-    outcomes = {"attempts": 0, "successes": 0, "failures": 0}
-    event_keys = {
-        "Submit Login Form": "attempts",
-        "Submit Login Form Success": "successes",
-        "Submit Login Form Failure": "failures",
-    }
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        }
-    )
-
-    for visit in data:
-        user_id = str(visit.get("userId", ""))
-        for action in visit.get("actionDetails", []):
-            if action.get("type") != "event":
-                continue
-            outcome = event_keys.get(action.get("eventAction"))
-            if outcome is None:
-                continue
-            if outcome == "successes" and user_id not in allowed_user_ids:
-                continue
-            outcomes[outcome] += 1
-
-    return outcomes
-
-
 def get_last_login_per_user(
     user_ids: list[str], progress_callback=None
 ) -> pd.DataFrame:
     """
     Fetches the most recent login date for each user.
 
-    Matomo method: Live.getLastVisitsDetails (one call per user)
+    Matomo method: Live.getLastVisitsDetails (one call per user, parallelised)
     Segment: userId=={user_id} — visit-level, no dimension10 filter needed.
 
     Args:
@@ -182,13 +159,9 @@ def get_last_login_per_user(
     Returns:
         DataFrame with columns: user_id (str), last_login_date (str "YYYY-MM-DD")
     """
-    records = []
     total = len(user_ids)
 
-    for i, user_id in enumerate(user_ids):
-        if progress_callback:
-            progress_callback(i, total)
-
+    def _fetch_one(user_id: str) -> dict:
         data = matomo_get(
             {
                 "method": "Live.getLastVisitsDetails",
@@ -200,22 +173,30 @@ def get_last_login_per_user(
                 "filter_limit": 1,
             }
         )
-
         last_login_date = ""
         if isinstance(data, list) and data:
             visit = data[0]
             raw = visit.get("lastActionDateTime") or visit.get("serverDate", "")
             last_login_date = raw[:10] if raw else ""
+        return {"user_id": str(user_id), "last_login_date": last_login_date}
 
-        records.append({"user_id": str(user_id), "last_login_date": last_login_date})
+    results: dict[str, dict] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        future_to_uid = {pool.submit(_fetch_one, uid): uid for uid in user_ids}
+        done = 0
+        for fut in concurrent.futures.as_completed(future_to_uid):
+            results[future_to_uid[fut]] = fut.result()
+            done += 1
+            if progress_callback:
+                progress_callback(done, total)
 
-    if progress_callback:
-        progress_callback(total, total)
-
+    records = [results[uid] for uid in user_ids]
     return pd.DataFrame(records, columns=["user_id", "last_login_date"])
 
 
-def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
+def get_visit_durations(
+    date_range: str, org_id=None, visits: list[dict] | None = None
+) -> pd.DataFrame:
     """
     Fetches raw visit durations over a date range.
 
@@ -231,13 +212,7 @@ def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
             user_id (str), visit_duration_seconds (float), has_deliver_action (bool)
     """
     columns = ["user_id", "visit_duration_seconds", "has_deliver_action"]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        }
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -262,7 +237,9 @@ def get_visit_durations(date_range: str, org_id=None) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
+def get_completed_sessions(
+    date_range: str, org_id=None, visits: list[dict] | None = None
+) -> pd.DataFrame:
     """
     Fetches completed session instances.
 
@@ -277,19 +254,14 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
 
     Args:
         date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        visits: pre-fetched visit list to reuse (avoids a redundant API call)
 
     Returns:
         DataFrame with columns: visit_id, bundle_id, session_id, user_id
         Deduplicated on (visit_id, bundle_id, session_id).
     """
     columns = ["visit_id", "bundle_id", "session_id", "user_id"]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        }
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -300,7 +272,9 @@ def get_completed_sessions(date_range: str, org_id=None) -> pd.DataFrame:
     ].reset_index(drop=True)
 
 
-def get_delivery_funnel_instances(date_range: str, org_id=None) -> pd.DataFrame:
+def get_delivery_funnel_instances(
+    date_range: str, org_id=None, visits: list[dict] | None = None
+) -> pd.DataFrame:
     """
     Fetch delivery funnel signals deduplicated per CST session instance.
 
@@ -319,19 +293,15 @@ def get_delivery_funnel_instances(date_range: str, org_id=None) -> pd.DataFrame:
         "completed_session",
         "completed_session_date",
     ]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        }
-    )
+    data = _live_visits(date_range, visits)
     if not data:
         return pd.DataFrame(columns=columns)
     return _delivery_session_instances_from_visits(data)
 
 
-def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
+def get_visit_dates(
+    date_range: str, org_id=None, visits: list[dict] | None = None
+) -> pd.DataFrame:
     """
     Fetches individual visit dates for all identified users.
 
@@ -347,14 +317,17 @@ def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
         DataFrame with columns: user_id (str), visit_date (str "YYYY-MM-DD")
     """
     columns = ["user_id", "visit_date"]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-            "doNotFetchActions": 1,
-        }
-    )
+    if visits is not None:
+        data = visits
+    else:
+        data = _fetch_all_live_visits(
+            {
+                "method": "Live.getLastVisitsDetails",
+                "period": "range",
+                "date": date_range,
+                "doNotFetchActions": 1,
+            }
+        )
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -372,7 +345,9 @@ def get_visit_dates(date_range: str, org_id=None) -> pd.DataFrame:
     return pd.DataFrame(records, columns=columns)
 
 
-def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFrame:
+def get_activity_completions_per_user(
+    date_range: str, org_id=None, visits: list[dict] | None = None
+) -> pd.DataFrame:
     """
     Counts completed activities per user in delivered sessions only.
 
@@ -386,13 +361,7 @@ def get_activity_completions_per_user(date_range: str, org_id=None) -> pd.DataFr
     Returns:
         DataFrame with columns: user_id (str), activities_completed (int)
     """
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        }
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=["user_id", "activities_completed"])
@@ -419,6 +388,7 @@ def get_activity_usage_by_id(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
+    visits: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
     Counts Activity Complete events per activityId and language in delivered sessions only.
@@ -437,14 +407,7 @@ def get_activity_usage_by_id(
         DataFrame with columns: activity_id (str), language (str), completion_count (int)
     """
     empty = pd.DataFrame(columns=["activity_id", "language", "completion_count"])
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        },
-        page_size=LIVE_VISIT_PAGE_SIZE,
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return empty
@@ -491,6 +454,7 @@ def get_step_completion_depth(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
+    visits: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
     Fetches unique completed steps for delivered activity occurrences.
@@ -519,14 +483,7 @@ def get_step_completion_depth(
         "language",
         "step_number",
     ]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        },
-        page_size=LIVE_VISIT_PAGE_SIZE,
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -594,6 +551,7 @@ def get_talking_point_engagement(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
+    visits: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
     Counts Talking Point Expand Click and Step Forward Click events per activity
@@ -610,14 +568,7 @@ def get_talking_point_engagement(
         expand_clicks (int), forward_clicks (int)
     """
     columns = ["activity_id", "language", "expand_clicks", "forward_clicks"]
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        },
-        page_size=LIVE_VISIT_PAGE_SIZE,
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -676,6 +627,7 @@ def get_media_usage(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
+    visits: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
     Counts audio and video interaction events per user and activity in
@@ -703,14 +655,7 @@ def get_media_usage(
         {"Video Button Click", "Video Play Click", "Video Pause Click"}
     )
 
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        },
-        page_size=LIVE_VISIT_PAGE_SIZE,
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)
@@ -763,6 +708,7 @@ def get_engagement_events(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
+    visits: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
     Counts additional-activity acceptance and activity-replacement events per user
@@ -796,14 +742,7 @@ def get_engagement_events(
     _REPLACE_WARMUP = "Change Warmup Activity Click"
     _REPLACE_RO = "Change Reality Orientation Activity Click"
 
-    data = _fetch_all_live_visits(
-        {
-            "method": "Live.getLastVisitsDetails",
-            "period": "range",
-            "date": date_range,
-        },
-        page_size=LIVE_VISIT_PAGE_SIZE,
-    )
+    data = _live_visits(date_range, visits)
 
     if not data:
         return pd.DataFrame(columns=columns)

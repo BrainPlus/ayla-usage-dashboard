@@ -3,6 +3,7 @@ from datetime import date
 
 import pandas as pd
 import pytest
+from sqlalchemy.pool import NullPool
 
 import database
 
@@ -11,6 +12,34 @@ class _Engine:
     @contextmanager
     def connect(self):
         yield object()
+
+
+def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> None:
+    captured = {}
+    database.get_engine.clear()
+    monkeypatch.setattr(
+        database.st,
+        "secrets",
+        {
+            "eu": {
+                "db_user": "user",
+                "db_password": "password",
+                "db_host": "db.example.com",
+                "db_port": 5432,
+                "db_name": "ayla",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        database,
+        "create_engine",
+        lambda url, **kwargs: captured.update(url=url, **kwargs) or object(),
+    )
+
+    database.get_engine("eu")
+
+    assert captured["poolclass"] is NullPool
+    database.get_engine.clear()
 
 
 @pytest.mark.parametrize(
