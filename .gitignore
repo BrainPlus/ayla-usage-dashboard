@@ -5,6 +5,5 @@ __pycache__/
 *.pyc
 .history/
 \!workfiles/
-docs/
 issues/
 .agent-loop/
