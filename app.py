@@ -1258,8 +1258,25 @@ else:
                 "recorded in the selected scope."
             )
         else:
+            _tp_language_options = merger.activity_language_filter_options(
+                _tp_engagement
+            )
+            _tp_language_filter = (
+                st.selectbox(
+                    "Talking-point engagement language",
+                    _tp_language_options,
+                    format_func=merger.format_activity_language_filter,
+                    key="talking_point_engagement_language_filter",
+                )
+                if len(_tp_language_options) > 1
+                else "all"
+            )
+            _filtered_tp_engagement = merger.filter_activity_usage_by_language(
+                _tp_engagement,
+                _tp_language_filter,
+            )
             _tp_table = merger.build_talking_point_engagement_table(
-                _tp_engagement, _activity_catalogue
+                _filtered_tp_engagement, _activity_catalogue
             )
             if _tp_table.empty:
                 st.info(
