@@ -26,6 +26,9 @@ _QUESTION_CHART_COLORS = {
     "groups": ["#1f77b4", "#2ca02c", "#17becf"],
     "therapists": ["#9467bd", "#17becf", "#8c564b", "#7f7f7f"],
 }
+_INTERNAL_ORGANISATION_NAMES = frozenset(
+    {"Brain+", "Brain+ Tech Organisation"}
+)
 
 _REPORT_DATA_KEYS = (
     "user_detail",
@@ -52,6 +55,7 @@ _REPORT_DATA_KEYS = (
     "fetched_date_range",
     "fetched_skip_last_login",
     "fetched_skip_bundle_history",
+    "fetched_exclude_internal_organisations",
 )
 
 _OVERVIEW_METRICS = (
@@ -210,6 +214,53 @@ def _show_global_bundle_creation_chart(fetched_org_id) -> bool:
 
 def _show_organisation_bundle_creation_chart(fetched_org_id) -> bool:
     return fetched_org_id is not None
+
+
+def _excluded_organisation_ids(orgs_df: pd.DataFrame) -> tuple[int, ...]:
+    if orgs_df.empty:
+        return ()
+    excluded = orgs_df[
+        orgs_df["organisation_name"]
+        .str.strip()
+        .str.casefold()
+        .isin(name.casefold() for name in _INTERNAL_ORGANISATION_NAMES)
+    ]
+    return tuple(sorted(excluded["organisation_id"].astype(int).tolist()))
+
+
+def _organisation_query_scope(
+    selected_org_id,
+    exclude_internal_organisations: bool,
+    excluded_organisation_ids: tuple[int, ...],
+):
+    if (
+        selected_org_id is None
+        and exclude_internal_organisations
+        and excluded_organisation_ids
+    ):
+        return excluded_organisation_ids
+    return selected_org_id
+
+
+def _organisation_options(
+    orgs_df: pd.DataFrame,
+    exclude_internal_organisations: bool,
+) -> list[str]:
+    organisation_names = orgs_df["organisation_name"].tolist()
+    if exclude_internal_organisations:
+        internal_names = {
+            name.casefold() for name in _INTERNAL_ORGANISATION_NAMES
+        }
+        organisation_names = [
+            name
+            for name in organisation_names
+            if name.strip().casefold() not in internal_names
+        ]
+    return (
+        ["All organisations"]
+        + organisation_names
+        + ["Unassigned / No organisation"]
+    )
 
 
 def _monthly_bundle_creation_chart(
@@ -459,6 +510,7 @@ def _should_clear_report(
     current_date_range: str,
     current_skip_last_login: bool = False,
     current_skip_bundle_history: bool = False,
+    current_exclude_internal_organisations: bool = True,
 ) -> bool:
     if not any(
         key in session_state
@@ -470,12 +522,17 @@ def _should_clear_report(
     fetched_date_range = session_state.get("fetched_date_range")
     fetched_skip_last_login = session_state.get("fetched_skip_last_login", False)
     fetched_skip_bundle_history = session_state.get("fetched_skip_bundle_history", False)
+    fetched_exclude_internal_organisations = session_state.get(
+        "fetched_exclude_internal_organisations", True
+    )
     return (
         fetched_region != current_region
         or fetched_org_id != current_org_id
         or fetched_date_range != current_date_range
         or fetched_skip_last_login != current_skip_last_login
         or fetched_skip_bundle_history != current_skip_bundle_history
+        or fetched_exclude_internal_organisations
+        != current_exclude_internal_organisations
     )
 
 
@@ -556,13 +613,18 @@ with st.sidebar:
     region = st.selectbox("Region", ["eu", "uk"])
 
     orgs_df = database.get_organisations(region)
-    org_options = (
-        ["All organisations"]
-        + orgs_df["organisation_name"].tolist()
-        + ["Unassigned / No organisation"]
+    exclude_internal_organisations = st.session_state.get(
+        "exclude_internal_organisations", True
+    )
+    excluded_organisation_ids = _excluded_organisation_ids(orgs_df)
+    org_options = _organisation_options(orgs_df, exclude_internal_organisations)
+    organisation_selector_key = (
+        f"org_selector_{region}_{exclude_internal_organisations}"
     )
     selected_org_name = st.selectbox(
-        "Organisation", org_options, key=f"org_selector_{region}"
+        "Organisation",
+        org_options,
+        key=organisation_selector_key,
     )
     if selected_org_name == "All organisations":
         selected_org_id = None
@@ -596,6 +658,15 @@ with st.sidebar:
             "completed session. Those fields will show as unavailable."
         ),
     )
+    exclude_internal_organisations = st.checkbox(
+        "Exclude Brain+ organisations",
+        value=True,
+        key="exclude_internal_organisations",
+        help=(
+            "Excludes Brain+ and Brain+ Tech Organisation from all-organisation "
+            "report results. Turn this off to pull data for either excluded organisation."
+        ),
+    )
 
     pull = st.button("Pull Data", type="primary")
     st.caption("Use the skip options above for a faster selected-period-only pull.")
@@ -605,6 +676,11 @@ if start_date > end_date:
     st.stop()
 
 date_range = f"{start_date},{end_date}"
+query_org_scope = _organisation_query_scope(
+    selected_org_id,
+    exclude_internal_organisations,
+    excluded_organisation_ids,
+)
 
 if _should_clear_report(
     st.session_state,
@@ -613,6 +689,7 @@ if _should_clear_report(
     date_range,
     skip_last_login,
     skip_bundle_history,
+    exclude_internal_organisations,
 ):
     for key in _REPORT_DATA_KEYS:
         st.session_state.pop(key, None)
@@ -634,34 +711,34 @@ if pull:
         # production database's limited connection slots.
         _update_pull_progress(0.02, "Querying database")
         with st.spinner("Querying database...", show_time=True):
-            db_users = database.load_users_and_orgs(region, org_id=selected_org_id)
+            db_users = database.load_users_and_orgs(region, org_id=query_org_scope)
             org_user_counts = database.get_org_user_counts(
-                region, org_id=selected_org_id
+                region, org_id=query_org_scope
             )
             bundle_counts = database.get_bundle_counts_per_org(
-                region, org_id=selected_org_id
+                region, org_id=query_org_scope
             )
             bundle_configurations = (
                 pd.DataFrame()
                 if skip_bundle_history
                 else database.get_bundle_configurations(
-                    region, org_id=selected_org_id
+                    region, org_id=query_org_scope
                 )
             )
             monthly_bundle_creations = _get_monthly_bundle_creations(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=query_org_scope
             )
             bundle_filter_breakdown = _get_bundle_filter_breakdown(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=query_org_scope
             )
             star_ratings = database.get_star_ratings_by_org(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=query_org_scope
             )
             feedback_submissions = database.get_feedback_submissions(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=query_org_scope
             )
             monthly_ratings = database.get_monthly_star_ratings(
-                region, start_date, end_date, org_id=selected_org_id
+                region, start_date, end_date, org_id=query_org_scope
             )
             bundle_history_date_range = (
                 None
@@ -692,7 +769,7 @@ if pull:
                 )
                 bundle_history_funnel = matomo.get_delivery_funnel_instances_streamed(
                     bundle_history_date_range,
-                    org_id=selected_org_id,
+                    org_id=query_org_scope,
                 )
             else:
                 bundle_history_funnel = None
@@ -703,7 +780,7 @@ if pull:
             live_visits = matomo.get_live_visits(date_range)
             _update_pull_progress(0.62, "Calculating Matomo metrics")
             delivery_funnel = matomo.get_delivery_funnel_instances(
-                date_range, org_id=selected_org_id, visits=live_visits
+                date_range, org_id=query_org_scope, visits=live_visits
             )
             if bundle_history_funnel is None:
                 bundle_history_funnel = delivery_funnel
@@ -724,43 +801,43 @@ if pull:
                 drop=True
             )
             activity_completions = matomo.get_activity_completions_per_user(
-                date_range, org_id=selected_org_id, visits=live_visits
+                date_range, org_id=query_org_scope, visits=live_visits
             )
             activity_catalogue = _cached_activity_catalogue()
             activity_usage = matomo.get_activity_usage_by_id(
                 date_range,
                 database_user_ids,
-                selected_org_id,
+                query_org_scope,
                 visits=live_visits,
             )
             step_completion_depth = matomo.get_step_completion_depth(
                 date_range,
                 database_user_ids,
-                selected_org_id,
+                query_org_scope,
                 visits=live_visits,
             )
             visit_durations = matomo.get_visit_durations(
-                date_range, org_id=selected_org_id, visits=live_visits
+                date_range, org_id=query_org_scope, visits=live_visits
             )
             visit_dates = matomo.get_visit_dates(
-                date_range, org_id=selected_org_id, visits=live_visits
+                date_range, org_id=query_org_scope, visits=live_visits
             )
             talking_point_engagement = matomo.get_talking_point_engagement(
                 date_range,
                 database_user_ids,
-                selected_org_id,
+                query_org_scope,
                 visits=live_visits,
             )
             media_usage = matomo.get_media_usage(
                 date_range,
                 database_user_ids,
-                selected_org_id,
+                query_org_scope,
                 visits=live_visits,
             )
             engagement_events = matomo.get_engagement_events(
                 date_range,
                 database_user_ids,
-                selected_org_id,
+                query_org_scope,
                 visits=live_visits,
             )
         _update_pull_progress(0.72, "Matomo analytics complete")
@@ -885,6 +962,7 @@ if pull:
             "fetched_date_range": date_range,
             "fetched_skip_last_login": skip_last_login,
             "fetched_skip_bundle_history": skip_bundle_history,
+            "fetched_exclude_internal_organisations": exclude_internal_organisations,
         })
 
         elapsed = _format_elapsed(monotonic() - pull_started)

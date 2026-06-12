@@ -59,6 +59,42 @@ def test_should_clear_report(monkeypatch) -> None:
     assert app._should_clear_report(loaded, "eu", "unassigned", "range")
     assert app._should_clear_report(loaded, "eu", 196, "different-range")
     assert app._should_clear_report({"global_summary": {}}, "eu", None, "range")
+    assert app._should_clear_report(
+        loaded, "eu", 196, "range", current_exclude_internal_organisations=False
+    )
+
+
+def test_internal_organisation_exclusion_scope(monkeypatch) -> None:
+    app = _import_app(monkeypatch)
+    orgs = pd.DataFrame(
+        [
+            {"organisation_id": 1, "organisation_name": "Other"},
+            {"organisation_id": 2, "organisation_name": "Brain+"},
+            {
+                "organisation_id": 3,
+                "organisation_name": "Brain+ Tech Organisation",
+            },
+        ]
+    )
+
+    excluded_ids = app._excluded_organisation_ids(orgs)
+
+    assert excluded_ids == (2, 3)
+    assert app._organisation_query_scope(None, True, excluded_ids) == (2, 3)
+    assert app._organisation_query_scope(None, False, excluded_ids) is None
+    assert app._organisation_query_scope(1, True, excluded_ids) == 1
+    assert app._organisation_options(orgs, True) == [
+        "All organisations",
+        "Other",
+        "Unassigned / No organisation",
+    ]
+    assert app._organisation_options(orgs, False) == [
+        "All organisations",
+        "Other",
+        "Brain+",
+        "Brain+ Tech Organisation",
+        "Unassigned / No organisation",
+    ]
 
 
 def test_database_user_ids_are_normalised_for_raw_aggregate_filters(monkeypatch) -> None:

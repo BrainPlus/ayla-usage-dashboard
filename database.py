@@ -35,6 +35,19 @@ def get_engine(region: str):
 def _organisation_filter(org_id, prefix: str = "WHERE") -> tuple[str, dict | None]:
     if org_id == "unassigned":
         return f"{prefix} u.organisation_id IS NULL", None
+    if isinstance(org_id, tuple):
+        if not org_id:
+            return "", None
+        params = {
+            f"excluded_org_id_{index}": excluded_org_id
+            for index, excluded_org_id in enumerate(org_id)
+        }
+        placeholders = ", ".join(f":{name}" for name in params)
+        return (
+            f"{prefix} (u.organisation_id IS NULL "
+            f"OR u.organisation_id NOT IN ({placeholders}))",
+            params,
+        )
     if org_id is not None:
         return f"{prefix} u.organisation_id = :org_id", {"org_id": org_id}
     return "", None

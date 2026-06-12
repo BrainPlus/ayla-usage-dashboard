@@ -85,6 +85,25 @@ def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> No
             "get_feedback_submissions",
             "get_monthly_star_ratings",
         )
+    ]
+    + [
+        (
+            function_name,
+            (196, 197),
+            "u.organisation_id NOT IN (:excluded_org_id_0, :excluded_org_id_1)",
+            {"excluded_org_id_0": 196, "excluded_org_id_1": 197},
+        )
+        for function_name in (
+            "load_users_and_orgs",
+            "get_org_user_counts",
+            "get_bundle_counts_per_org",
+            "get_bundle_configurations",
+            "get_monthly_bundle_creations",
+            "get_bundle_filter_breakdown",
+            "get_star_ratings_by_org",
+            "get_feedback_submissions",
+            "get_monthly_star_ratings",
+        )
     ],
 )
 def test_database_queries_apply_organisation_filter(
