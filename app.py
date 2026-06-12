@@ -100,8 +100,9 @@ _SECTION_HELP = {
         "range. A visit is treated as a login/browser session."
     ),
     "delivery_funnel": (
-        "Progression from selecting Deliver, through at least one high-confidence "
-        "deliver-mode activity signal, to a deliver-mode Session Complete event. "
+        "Progression from selecting Deliver (a boundary event emitted before the "
+        "mode changes), through at least one high-confidence deliver-mode activity "
+        "signal, to a deliver-mode Session Complete event. "
         "Each stage is deduplicated by Matomo visit + bundle + session ID."
     ),
     "monthly_average_star_ratings": (
@@ -260,8 +261,8 @@ def _delivery_funnel_summary(global_summary: dict) -> pd.DataFrame:
             {
                 "Stage": stage,
                 "Sessions": count,
-                "Drop-off from previous": dropoff,
-                "Drop-off %": dropoff_pct,
+                "Drop-off from previous": str(dropoff) if dropoff is not None else "N/A",
+                "Drop-off %": f"{dropoff_pct:.1f}%" if dropoff_pct is not None else "N/A",
             }
         )
     return pd.DataFrame(rows)
@@ -959,8 +960,8 @@ else:
             use_container_width=True,
             column_config={
                 "Sessions": st.column_config.NumberColumn(format="%d"),
-                "Drop-off from previous": st.column_config.NumberColumn(format="%d"),
-                "Drop-off %": st.column_config.NumberColumn(format="%.1f%%"),
+                "Drop-off from previous": st.column_config.TextColumn(),
+                "Drop-off %": st.column_config.TextColumn(),
             },
             hide_index=True,
         )
@@ -1311,7 +1312,7 @@ else:
                 ),
                 "deliver_selected_sessions": st.column_config.NumberColumn(
                     help=(
-                        "Deliver-mode Prepare/Deliver dialog - Deliver Click events, "
+                        "Prepare/Deliver dialog - Deliver Click boundary events, "
                         "deduplicated by Matomo visit + bundle + session ID."
                     ),
                 ),

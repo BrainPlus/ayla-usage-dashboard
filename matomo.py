@@ -284,8 +284,9 @@ def get_delivery_funnel_instances(
     """
     Fetch delivery funnel signals deduplicated per CST session instance.
 
-    Active Delivery requires both a Deliver Selected event and at least one
-    high-confidence event from the #28 allowlist for the same
+    Deliver Selected is a boundary event emitted before deliver mode is set, so
+    it does not carry dimension10. Active Delivery requires that event and at
+    least one deliver-mode high-confidence event from the #28 allowlist for the same
     (visit_id, bundle_id, session_id). Completed Session uses the same
     deliver-mode Session Complete definition as get_completed_sessions.
     """
@@ -847,9 +848,15 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
         visit_id = str(visit.get("idVisit") or f"missing-{visit_index}")
         user_id = str(visit.get("userId", ""))
         for action in visit.get("actionDetails", []):
+            if action.get("type") != "event":
+                continue
+
+            event_action = action.get("eventAction", "")
+            # The Deliver Click changes the mode and is emitted without dimension10.
+            # All signals after that boundary must still be explicitly deliver mode.
             if (
-                action.get("type") != "event"
-                or _extract_dimension(action, "10") != "false"
+                event_action != _DELIVER_SELECTED_EVENT
+                and _extract_dimension(action, "10") != "false"
             ):
                 continue
             bundle_id = _extract_dimension(action, "14")
@@ -857,7 +864,6 @@ def _delivery_session_instances_from_visits(visits: list[dict]) -> pd.DataFrame:
             if not bundle_id or not session_id:
                 continue
 
-            event_action = action.get("eventAction", "")
             if (
                 event_action != _DELIVER_SELECTED_EVENT
                 and event_action not in _ACTIVE_DELIVERY_EVENTS

@@ -180,20 +180,20 @@ def test_delivery_funnel_summary_shows_absolute_and_percentage_dropoff(monkeypat
         }
     )
 
-    assert pd.isna(result.iloc[0]["Drop-off from previous"])
-    assert pd.isna(result.iloc[0]["Drop-off %"])
+    assert result.iloc[0]["Drop-off from previous"] == "N/A"
+    assert result.iloc[0]["Drop-off %"] == "N/A"
     assert result.iloc[1:].to_dict("records") == [
         {
             "Stage": "Active Delivery",
             "Sessions": 8,
-            "Drop-off from previous": 2,
-            "Drop-off %": 20.0,
+            "Drop-off from previous": "2",
+            "Drop-off %": "20.0%",
         },
         {
             "Stage": "Completed Session",
             "Sessions": 6,
-            "Drop-off from previous": 2,
-            "Drop-off %": 25.0,
+            "Drop-off from previous": "2",
+            "Drop-off %": "25.0%",
         },
     ]
 
@@ -209,8 +209,8 @@ def test_delivery_funnel_summary_clamps_negative_dropoff(monkeypatch) -> None:
         }
     )
 
-    assert result.iloc[1:]["Drop-off from previous"].tolist() == [0.0, 0.0]
-    assert result.iloc[1:]["Drop-off %"].tolist() == [0.0, 0.0]
+    assert result.iloc[1:]["Drop-off from previous"].tolist() == ["0", "0"]
+    assert result.iloc[1:]["Drop-off %"].tolist() == ["0.0%", "0.0%"]
 
 
 

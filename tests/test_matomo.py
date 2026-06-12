@@ -262,21 +262,23 @@ def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_k
     monkeypatch,
 ) -> None:
     def event(action, bundle="b1", session="s1", mode="false"):
-        return {
+        result = {
             "type": "event",
             "eventAction": action,
-            "dimension10": mode,
             "dimension14": bundle,
             "dimension5": session,
         }
+        if mode is not None:
+            result["dimension10"] = mode
+        return result
 
     visits = [
         {
             "idVisit": "v1",
             "userId": "u1",
             "actionDetails": [
-                event("Prepare/Deliver dialog - Deliver Click"),
-                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Prepare/Deliver dialog - Deliver Click", mode=None),
+                event("Prepare/Deliver dialog - Deliver Click", mode=None),
                 event("Talking Point Expand Click"),
                 event("Reality Orientation Date Set"),
                 event("Session Complete"),
@@ -290,7 +292,7 @@ def test_get_delivery_funnel_instances_uses_allowlist_and_shared_deduplication_k
             "idVisit": "v2",
             "userId": "u1",
             "actionDetails": [
-                event("Prepare/Deliver dialog - Deliver Click"),
+                event("Prepare/Deliver dialog - Deliver Click", mode=None),
                 event("Step Complete"),
             ],
         },

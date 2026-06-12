@@ -82,8 +82,8 @@ def build_methodology_df(
             "Delivery funnel",
             "Deliver Selected, Active Delivery, and Completed Session counts are each "
             "deduplicated by (Matomo visitId + bundleId + sessionId). Active Delivery "
-            "requires a Deliver Selected event and at least one high-confidence "
-            "deliver-mode activity signal.",
+            "requires a Deliver Selected boundary event, which is emitted before the "
+            "mode changes, and at least one high-confidence deliver-mode activity signal.",
         ),
         (
             "Delivery funnel drop-off",

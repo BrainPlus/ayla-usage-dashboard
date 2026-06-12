@@ -141,6 +141,8 @@ To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automati
 
 **Deliver mode filter** — All session, activity, and step event queries filter on `dimension10 == "false"` at the action level via `_extract_dimension`. This excludes Prepare (edit) mode. The `customDimension10==false` Matomo segment is not used because the Live API returns custom dimensions as bare `dimensionN` keys that the segment engine cannot match on this instance.
 
+The one exception is `Prepare/Deliver dialog - Deliver Click`: it is the boundary event that switches into Deliver Mode and is emitted without `dimension10`. The delivery funnel counts it as Deliver Selected when bundle and session IDs are present; all later funnel signals still require `dimension10 == "false"`.
+
 **Regional filtering for raw Matomo aggregates** — Matomo is shared by UK and EU. Any raw Matomo data that is aggregated without first being joined to database users must be restricted to user IDs from the selected region's database before aggregation.
 
 **Bundles table** — Never query `SELECT * FROM bundles`. The table is large and the query is slow. Always use targeted queries selecting only the columns needed (`b.id`, `b.user_id`). The join path to organisations is `bundles.user_id → users.id → users.organisation_id → organisations.id`.

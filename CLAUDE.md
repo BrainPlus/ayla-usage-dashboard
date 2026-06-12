@@ -43,6 +43,11 @@ This ensures we only count real delivered sessions, not therapists editing/prepa
 Do not use the `customDimension10==false` Matomo segment: it returns no results on
 this instance. 
 
+Exception: `Prepare/Deliver dialog - Deliver Click` is the boundary event that
+switches into Deliver Mode and is emitted without dimension10. It may be counted
+as Deliver Selected when bundleId and sessionId are present. All subsequent
+Active Delivery and Completed Session signals must still require dimension10 == false.
+
 ## Database Schema (relevant tables)
 - users: id, email, organisation_id
 - organisations: id, name
