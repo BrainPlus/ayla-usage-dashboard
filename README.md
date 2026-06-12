@@ -135,6 +135,9 @@ Secrets are managed in the app settings under **Settings → Secrets** in the St
 
 To deploy updates, push to the `main` branch. Streamlit Cloud redeploys automatically.
 
+Data-pull error messages include the deployed Git commit SHA so production
+failures can be matched to the exact revision.
+
 ---
 
 ## Important Notes

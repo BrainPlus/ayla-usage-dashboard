@@ -12,8 +12,9 @@ import database
 import matomo
 import merger
 import exporter
+from revision import get_deployment_revision
 
-APP_REVISION = "2026-06-10-dashboard-foundation"
+APP_REVISION = get_deployment_revision()
 
 st.set_page_config(page_title="Ayla Usage Dashboard", layout="wide")
 
