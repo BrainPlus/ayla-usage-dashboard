@@ -1380,6 +1380,184 @@ def build_engagement_events_by_org(
     )
 
 
+def build_cwl_library_summary(
+    cwl_libraries: pd.DataFrame,
+    library_opens: pd.DataFrame,
+    item_opens: pd.DataFrame,
+    item_time_spent: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Builds the per-library summary table for the Cognitive Wellbeing Library.
+
+    Args:
+        cwl_libraries:   library_id, library_name, creator_email,
+                         organisation_name, created_date
+                         (database.get_cwl_libraries)
+        library_opens:   library_id, user_id, opened_at
+                         (matomo.get_cwl_library_opens)
+        item_opens:      library_id, activity_id, user_id, started_at
+                         (matomo.get_cwl_item_opens)
+        item_time_spent: library_id, activity_id, seconds_spent
+                         (matomo.get_cwl_item_time_spent)
+
+    Returns:
+        DataFrame with columns: library_id, library_name, creator_email,
+        organisation_name, created_date, times_opened, distinct_users_opened,
+        distinct_items_opened, total_seconds_spent, last_used_date.
+
+        last_used_date is the most recent of either opening the library
+        itself or starting an item within it, so a library used only to run
+        items (without a fresh dropdown selection in between) still updates.
+    """
+    summary = cwl_libraries.copy()
+
+    if library_opens.empty:
+        summary["times_opened"] = 0
+        summary["distinct_users_opened"] = 0
+    else:
+        opens_by_library = (
+            library_opens.groupby("library_id")
+            .agg(
+                times_opened=("library_id", "size"),
+                distinct_users_opened=("user_id", "nunique"),
+            )
+            .reset_index()
+        )
+        summary = summary.merge(opens_by_library, on="library_id", how="left")
+        summary["times_opened"] = summary["times_opened"].fillna(0).astype(int)
+        summary["distinct_users_opened"] = (
+            summary["distinct_users_opened"].fillna(0).astype(int)
+        )
+
+    if item_opens.empty:
+        summary["distinct_items_opened"] = 0
+    else:
+        items_by_library = (
+            item_opens.groupby("library_id")["activity_id"]
+            .nunique()
+            .reset_index(name="distinct_items_opened")
+        )
+        summary = summary.merge(items_by_library, on="library_id", how="left")
+        summary["distinct_items_opened"] = (
+            summary["distinct_items_opened"].fillna(0).astype(int)
+        )
+
+    if item_time_spent.empty:
+        summary["total_seconds_spent"] = 0
+    else:
+        time_by_library = (
+            item_time_spent.groupby("library_id")["seconds_spent"]
+            .sum()
+            .reset_index(name="total_seconds_spent")
+        )
+        summary = summary.merge(time_by_library, on="library_id", how="left")
+        summary["total_seconds_spent"] = (
+            summary["total_seconds_spent"].fillna(0).astype(int)
+        )
+
+    usage_timestamps = []
+    if not library_opens.empty:
+        usage_timestamps.append(
+            library_opens.rename(columns={"opened_at": "used_at"})[
+                ["library_id", "used_at"]
+            ]
+        )
+    if not item_opens.empty:
+        usage_timestamps.append(
+            item_opens.rename(columns={"started_at": "used_at"})[
+                ["library_id", "used_at"]
+            ]
+        )
+    if usage_timestamps:
+        last_used = (
+            pd.concat(usage_timestamps)
+            .groupby("library_id")["used_at"]
+            .max()
+            .reset_index()
+            .rename(columns={"used_at": "last_used_date"})
+        )
+        summary = summary.merge(last_used, on="library_id", how="left")
+        summary["last_used_date"] = summary["last_used_date"].fillna("")
+    else:
+        summary["last_used_date"] = ""
+
+    return summary
+
+
+def build_cwl_item_breakdown(
+    item_opens: pd.DataFrame,
+    item_time_spent: pd.DataFrame,
+    activity_catalogue: dict,
+) -> pd.DataFrame:
+    """
+    Builds a per-(library, item) breakdown: open count, time spent, and
+    resolved activity name.
+
+    Args:
+        item_opens:         library_id, activity_id, user_id, started_at
+                            (matomo.get_cwl_item_opens)
+        item_time_spent:    library_id, activity_id, seconds_spent
+                            (matomo.get_cwl_item_time_spent)
+        activity_catalogue: dict mapping activity_id -> title from Squidex.
+                            Unknown IDs fall back to the raw ID string.
+
+    Returns:
+        DataFrame with columns: library_id, activity_id, activity_name,
+        open_count, seconds_spent — sorted by library then open_count
+        descending.
+    """
+    columns = [
+        "library_id",
+        "activity_id",
+        "activity_name",
+        "open_count",
+        "seconds_spent",
+    ]
+    if item_opens.empty:
+        return pd.DataFrame(columns=columns)
+
+    counts = (
+        item_opens.groupby(["library_id", "activity_id"])
+        .size()
+        .reset_index(name="open_count")
+    )
+    counts = counts.merge(
+        item_time_spent, on=["library_id", "activity_id"], how="left"
+    )
+    counts["seconds_spent"] = counts["seconds_spent"].fillna(0).astype(int)
+    counts["activity_name"] = (
+        counts["activity_id"].map(activity_catalogue).fillna(counts["activity_id"])
+    )
+    return (
+        counts[columns]
+        .sort_values(["library_id", "open_count"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
+
+
+def build_cwl_usage_log(library_opens: pd.DataFrame) -> pd.DataFrame:
+    """
+    Builds a flat log of every Cognitive Wellbeing Library open, for a
+    per-library drill-down of exactly when it was used and by whom.
+
+    Args:
+        library_opens: library_id, user_id, opened_at
+                       (matomo.get_cwl_library_opens)
+
+    Returns:
+        DataFrame with columns: library_id, user_id, opened_at — sorted most
+        recent first.
+    """
+    columns = ["library_id", "user_id", "opened_at"]
+    if library_opens.empty:
+        return pd.DataFrame(columns=columns)
+    return (
+        library_opens[columns]
+        .sort_values("opened_at", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
 def _normalise_activity_language(value: object) -> str:
     raw = str(value or "").strip().lower().replace("_", "-")
     if not raw or raw in {"none", "nan"}:

@@ -1374,3 +1374,187 @@ def test_org_summary_adds_full_programme_positive_indicator() -> None:
 
     assert result.loc["Org A", "full_programmes"] == 2
     assert result.loc["Org B", "full_programmes"] == 0
+
+
+def test_build_cwl_library_summary_combines_all_sources() -> None:
+    cwl_libraries = pd.DataFrame([
+        {
+            "library_id": "1",
+            "library_name": "Monday Group",
+            "creator_email": "therapist@example.com",
+            "organisation_name": "Org A",
+            "created_date": date(2026, 1, 1),
+        }
+    ])
+    library_opens = pd.DataFrame([
+        {"library_id": "1", "user_id": "u1", "opened_at": "2026-02-01T10:00:00+00:00"},
+        {"library_id": "1", "user_id": "u1", "opened_at": "2026-02-02T10:00:00+00:00"},
+        {"library_id": "1", "user_id": "u2", "opened_at": "2026-02-03T10:00:00+00:00"},
+    ])
+    item_opens = pd.DataFrame([
+        {
+            "library_id": "1",
+            "activity_id": "act-1",
+            "user_id": "u1",
+            "started_at": "2026-02-01T10:05:00+00:00",
+        },
+        {
+            "library_id": "1",
+            "activity_id": "act-2",
+            "user_id": "u1",
+            "started_at": "2026-02-01T10:10:00+00:00",
+        },
+    ])
+    item_time_spent = pd.DataFrame([
+        {"library_id": "1", "activity_id": "act-1", "seconds_spent": 30},
+        {"library_id": "1", "activity_id": "act-2", "seconds_spent": 45},
+    ])
+
+    result = merger.build_cwl_library_summary(
+        cwl_libraries, library_opens, item_opens, item_time_spent
+    )
+
+    row = result.iloc[0]
+    assert row["times_opened"] == 3
+    assert row["distinct_users_opened"] == 2
+    assert row["distinct_items_opened"] == 2
+    assert row["total_seconds_spent"] == 75
+    assert row["last_used_date"] == "2026-02-03T10:00:00+00:00"
+
+
+def test_build_cwl_library_summary_library_with_no_usage_shows_zeros() -> None:
+    cwl_libraries = pd.DataFrame([
+        {
+            "library_id": "1",
+            "library_name": "Unused Library",
+            "creator_email": "therapist@example.com",
+            "organisation_name": "Org A",
+            "created_date": date(2026, 1, 1),
+        }
+    ])
+    empty_opens = pd.DataFrame(columns=["library_id", "user_id", "opened_at"])
+    empty_item_opens = pd.DataFrame(
+        columns=["library_id", "activity_id", "user_id", "started_at"]
+    )
+    empty_time_spent = pd.DataFrame(
+        columns=["library_id", "activity_id", "seconds_spent"]
+    )
+
+    result = merger.build_cwl_library_summary(
+        cwl_libraries, empty_opens, empty_item_opens, empty_time_spent
+    )
+
+    row = result.iloc[0]
+    assert row["times_opened"] == 0
+    assert row["distinct_users_opened"] == 0
+    assert row["distinct_items_opened"] == 0
+    assert row["total_seconds_spent"] == 0
+    assert row["last_used_date"] == ""
+
+
+def test_build_cwl_library_summary_last_used_falls_back_to_item_starts() -> None:
+    """A library opened once but with a later item start should use the
+    item start as last_used_date."""
+    cwl_libraries = pd.DataFrame([
+        {
+            "library_id": "1",
+            "library_name": "Monday Group",
+            "creator_email": "therapist@example.com",
+            "organisation_name": "Org A",
+            "created_date": date(2026, 1, 1),
+        }
+    ])
+    library_opens = pd.DataFrame([
+        {"library_id": "1", "user_id": "u1", "opened_at": "2026-02-01T10:00:00+00:00"},
+    ])
+    item_opens = pd.DataFrame([
+        {
+            "library_id": "1",
+            "activity_id": "act-1",
+            "user_id": "u1",
+            "started_at": "2026-02-05T10:00:00+00:00",
+        },
+    ])
+    empty_time_spent = pd.DataFrame(
+        columns=["library_id", "activity_id", "seconds_spent"]
+    )
+
+    result = merger.build_cwl_library_summary(
+        cwl_libraries, library_opens, item_opens, empty_time_spent
+    )
+
+    assert result.iloc[0]["last_used_date"] == "2026-02-05T10:00:00+00:00"
+
+
+def test_build_cwl_item_breakdown_resolves_names_and_sums_time() -> None:
+    item_opens = pd.DataFrame([
+        {"library_id": "1", "activity_id": "act-1", "user_id": "u1", "started_at": "t1"},
+        {"library_id": "1", "activity_id": "act-1", "user_id": "u2", "started_at": "t2"},
+        {"library_id": "1", "activity_id": "act-2", "user_id": "u1", "started_at": "t3"},
+    ])
+    item_time_spent = pd.DataFrame([
+        {"library_id": "1", "activity_id": "act-1", "seconds_spent": 50},
+        {"library_id": "1", "activity_id": "act-2", "seconds_spent": 20},
+    ])
+    catalogue = {"act-1": "Reality Orientation", "act-2": "Warm Up"}
+
+    result = merger.build_cwl_item_breakdown(item_opens, item_time_spent, catalogue)
+
+    assert result.iloc[0]["activity_name"] == "Reality Orientation"
+    assert result.iloc[0]["open_count"] == 2
+    assert result.iloc[0]["seconds_spent"] == 50
+    assert result.iloc[1]["activity_name"] == "Warm Up"
+    assert result.iloc[1]["open_count"] == 1
+
+
+def test_build_cwl_item_breakdown_unknown_activity_falls_back_to_id() -> None:
+    item_opens = pd.DataFrame([
+        {"library_id": "1", "activity_id": "unknown-x", "user_id": "u1", "started_at": "t1"},
+    ])
+    empty_time_spent = pd.DataFrame(
+        columns=["library_id", "activity_id", "seconds_spent"]
+    )
+
+    result = merger.build_cwl_item_breakdown(item_opens, empty_time_spent, {})
+
+    assert result.iloc[0]["activity_name"] == "unknown-x"
+    assert result.iloc[0]["seconds_spent"] == 0
+
+
+def test_build_cwl_item_breakdown_empty_opens_returns_empty() -> None:
+    empty_opens = pd.DataFrame(
+        columns=["library_id", "activity_id", "user_id", "started_at"]
+    )
+    empty_time_spent = pd.DataFrame(
+        columns=["library_id", "activity_id", "seconds_spent"]
+    )
+
+    result = merger.build_cwl_item_breakdown(empty_opens, empty_time_spent, {})
+
+    assert result.empty
+    assert "activity_name" in result.columns
+
+
+def test_build_cwl_usage_log_sorts_most_recent_first() -> None:
+    library_opens = pd.DataFrame([
+        {"library_id": "1", "user_id": "u1", "opened_at": "2026-02-01T10:00:00+00:00"},
+        {"library_id": "1", "user_id": "u2", "opened_at": "2026-02-03T10:00:00+00:00"},
+        {"library_id": "1", "user_id": "u1", "opened_at": "2026-02-02T10:00:00+00:00"},
+    ])
+
+    result = merger.build_cwl_usage_log(library_opens)
+
+    assert list(result["opened_at"]) == [
+        "2026-02-03T10:00:00+00:00",
+        "2026-02-02T10:00:00+00:00",
+        "2026-02-01T10:00:00+00:00",
+    ]
+
+
+def test_build_cwl_usage_log_empty_returns_empty() -> None:
+    empty_opens = pd.DataFrame(columns=["library_id", "user_id", "opened_at"])
+
+    result = merger.build_cwl_usage_log(empty_opens)
+
+    assert result.empty
+    assert list(result.columns) == ["library_id", "user_id", "opened_at"]
