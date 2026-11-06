@@ -166,6 +166,9 @@ def test_all_report_sections_have_help_text(monkeypatch) -> None:
         "daily_visit_activity",
         "by_organisation",
         "by_user",
+        "cwl_library_summary",
+        "cwl_item_breakdown",
+        "cwl_usage_log",
     }
     assert all(app._SECTION_HELP.values())
     assert "selected date range" in app._SECTION_HELP["activity_usage"]

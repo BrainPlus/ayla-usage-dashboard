@@ -47,6 +47,9 @@ _REPORT_DATA_KEYS = (
     "media_usage",
     "engagement_events",
     "daily_visit_activity",
+    "cwl_library_summary",
+    "cwl_item_breakdown",
+    "cwl_usage_log",
     "region",
     "date_range",
     "fetched_region",
@@ -180,6 +183,24 @@ _SECTION_HELP = {
     "daily_visit_activity": (
         "Daily number of Matomo visits and unique users during the selected reporting period. "
         "A Matomo visit represents one continuous browser session."
+    ),
+    "cwl_library_summary": (
+        "One row per Cognitive Wellbeing Library. Times Opened counts dropdown "
+        "selections, including the auto-select right after a library is created. "
+        "Total Time Spent is an approximation — see the Item Breakdown help for "
+        "the methodology."
+    ),
+    "cwl_item_breakdown": (
+        "One row per item opened within a library. Open Count is based on the "
+        "'Start Click' event — actually running the item, not just viewing its "
+        "detail dialog. Time Spent approximates engagement via the delta "
+        "between consecutive navigation clicks within a run, capped at 10 "
+        "minutes of idle time between clicks; the final interval of each run "
+        "is not measured, since there is no 'activity closed' event to bound it."
+    ),
+    "cwl_usage_log": (
+        "Every time a library was opened (selected from the dropdown, or "
+        "auto-selected right after creation), with the user and timestamp."
     ),
 }
 
@@ -718,6 +739,9 @@ if pull:
             bundle_counts = database.get_bundle_counts_per_org(
                 region, org_id=query_org_scope
             )
+            cwl_libraries = database.get_cwl_libraries(
+                region, org_id=query_org_scope
+            )
             bundle_configurations = (
                 pd.DataFrame()
                 if skip_bundle_history
@@ -840,6 +864,24 @@ if pull:
                 query_org_scope,
                 visits=live_visits,
             )
+            cwl_library_opens = matomo.get_cwl_library_opens(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
+            cwl_item_opens = matomo.get_cwl_item_opens(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
+            cwl_item_time_spent = matomo.get_cwl_item_time_spent(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
         _update_pull_progress(0.72, "Matomo analytics complete")
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
@@ -866,6 +908,12 @@ if pull:
         media_usage = _filter_to_database_users(media_usage, database_user_ids)
         engagement_events = _filter_to_database_users(
             engagement_events, database_user_ids
+        )
+        cwl_library_opens = _filter_to_database_users(
+            cwl_library_opens, database_user_ids
+        )
+        cwl_item_opens = _filter_to_database_users(
+            cwl_item_opens, database_user_ids
         )
 
         # Step 3 — Last login per user (slowest — show progress)
@@ -936,6 +984,13 @@ if pull:
             daily_visit_activity = merger.build_daily_visit_activity(
                 visit_dates, start_date, end_date
             )
+            cwl_library_summary = merger.build_cwl_library_summary(
+                cwl_libraries, cwl_library_opens, cwl_item_opens, cwl_item_time_spent
+            )
+            cwl_item_breakdown = merger.build_cwl_item_breakdown(
+                cwl_item_opens, cwl_item_time_spent, activity_catalogue
+            )
+            cwl_usage_log = merger.build_cwl_usage_log(cwl_library_opens)
 
         st.session_state.update({
             "user_detail": user_detail,
@@ -954,6 +1009,9 @@ if pull:
             "media_usage": media_usage,
             "engagement_events": engagement_events,
             "daily_visit_activity": daily_visit_activity,
+            "cwl_library_summary": cwl_library_summary,
+            "cwl_item_breakdown": cwl_item_breakdown,
+            "cwl_usage_log": cwl_usage_log,
             "region": region,
             "date_range": date_range,
             "fetched_region": region,
@@ -986,10 +1044,12 @@ if pull:
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs(["Global Overview", "By Organisation", "By User"])
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["Global Overview", "By Organisation", "By User", "Cognitive Wellbeing"]
+)
 
 if "global_summary" not in st.session_state:
-    for tab in (tab1, tab2, tab3):
+    for tab in (tab1, tab2, tab3, tab4):
         with tab:
             st.info("Select a region and date range in the sidebar, then click **Pull Data**.")
 else:
@@ -1716,6 +1776,109 @@ else:
             }),
             use_container_width=True,
         )
+
+    # ── Tab 4: Cognitive Wellbeing ─────────────────────────────────────────────
+    with tab4:
+        st.subheader(
+            "Cognitive Wellbeing Libraries",
+            help=_SECTION_HELP["cwl_library_summary"],
+        )
+        _cwl_library_summary = st.session_state.get(
+            "cwl_library_summary", pd.DataFrame()
+        )
+        if _cwl_library_summary.empty:
+            st.info("No Cognitive Wellbeing Libraries found for the selected scope.")
+        else:
+            _cwl_display = _cwl_library_summary.copy()
+            _cwl_display["total_minutes_spent"] = (
+                _cwl_display["total_seconds_spent"] / 60
+            ).round(1)
+            st.dataframe(
+                _cwl_display.drop(columns=["library_id", "total_seconds_spent"]),
+                use_container_width=True,
+                hide_index=True,
+                column_config=_column_config_for(
+                    _cwl_display,
+                    {
+                        "library_name": st.column_config.TextColumn("Library Name"),
+                        "organisation_name": st.column_config.TextColumn("Organisation"),
+                        "creator_email": st.column_config.TextColumn("Created By"),
+                        "created_date": st.column_config.TextColumn("Created Date"),
+                        "times_opened": st.column_config.NumberColumn("Times Opened"),
+                        "distinct_users_opened": st.column_config.NumberColumn(
+                            "Distinct Users"
+                        ),
+                        "distinct_items_opened": st.column_config.NumberColumn(
+                            "Distinct Items Opened"
+                        ),
+                        "total_minutes_spent": st.column_config.NumberColumn(
+                            "Total Time Spent (min)", format="%.1f"
+                        ),
+                        "last_used_date": st.column_config.TextColumn("Last Used"),
+                    },
+                ),
+            )
+
+            _library_names = _cwl_library_summary.set_index("library_id")[
+                "library_name"
+            ]
+
+            st.markdown(
+                "**Item Breakdown**", help=_SECTION_HELP["cwl_item_breakdown"]
+            )
+            _cwl_item_breakdown = st.session_state.get(
+                "cwl_item_breakdown", pd.DataFrame()
+            )
+            if _cwl_item_breakdown.empty:
+                st.info("No activities started in any library for the selected scope.")
+            else:
+                _item_display = _cwl_item_breakdown.copy()
+                _item_display["library_name"] = _item_display["library_id"].map(
+                    _library_names
+                )
+                _item_display["minutes_spent"] = (
+                    _item_display["seconds_spent"] / 60
+                ).round(1)
+                st.dataframe(
+                    _item_display[
+                        [
+                            "library_name",
+                            "activity_name",
+                            "open_count",
+                            "minutes_spent",
+                        ]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "library_name": st.column_config.TextColumn("Library Name"),
+                        "activity_name": st.column_config.TextColumn("Item Name"),
+                        "open_count": st.column_config.NumberColumn("Open Count"),
+                        "minutes_spent": st.column_config.NumberColumn(
+                            "Time Spent (min)", format="%.1f"
+                        ),
+                    },
+                )
+
+            st.markdown("**Usage Log**", help=_SECTION_HELP["cwl_usage_log"])
+            _cwl_usage_log = st.session_state.get("cwl_usage_log", pd.DataFrame())
+            if _cwl_usage_log.empty:
+                st.info("No library opens recorded for the selected scope.")
+            else:
+                _log_display = _cwl_usage_log.copy()
+                _log_display["library_name"] = _log_display["library_id"].map(
+                    _library_names
+                )
+                st.dataframe(
+                    _log_display[["library_name", "user_id", "opened_at"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "library_name": st.column_config.TextColumn("Library Name"),
+                        "user_id": st.column_config.TextColumn("User ID"),
+                        "opened_at": st.column_config.TextColumn("Opened At"),
+                    },
+                )
 
 
 # ── download button ───────────────────────────────────────────────────────────
