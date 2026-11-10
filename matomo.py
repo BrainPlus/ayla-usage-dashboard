@@ -894,7 +894,7 @@ def get_cwl_library_opens(
     return df
 
 
-def get_cwl_item_opens(
+def get_cwl_activity_opens(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
@@ -906,9 +906,9 @@ def get_cwl_item_opens(
     Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
     eventCategory: Activity, eventAction: Activity Library - Start Click
 
-    "Start Click" (not "Card Click") is used as the canonical "item opened"
-    signal: it only fires when a facilitator actually runs the activity, not
-    just views its detail dialog.
+    "Start Click" (not "Card Click") is used as the canonical "activity
+    started" signal: it only fires when a facilitator actually runs the
+    activity, not just views its detail dialog.
 
     Not scoped to dimension10 (editMode) — the Cognitive Wellbeing Library
     track has no prepare/deliver concept.
@@ -960,7 +960,7 @@ def get_cwl_item_opens(
     return df
 
 
-def get_cwl_item_time_spent(
+def get_cwl_activity_time_spent(
     date_range: str,
     allowed_user_ids: frozenset[str] | None = None,
     org_id=None,
@@ -974,12 +974,12 @@ def get_cwl_item_time_spent(
     by timestamp — the same approach as the CST "Talking-Point Engagement
     (Approximate)" methodology (see explore_talking_point_time.py). Also
     anchors the first interval from 'Activity Library - Start Click', so
-    items with fewer than two forward clicks still register measured time
-    (CWL activities are often short — a single card or video).
+    activities with fewer than two forward clicks still register measured
+    time (CWL activities are often short — a single card or video).
 
     Grouping by (library_id, activity_id) — not just by visit — prevents the
-    gap between finishing one item and starting a different one in the same
-    visit from being counted as time spent on either.
+    gap between finishing one activity and starting a different one in the
+    same visit from being counted as time spent on either.
 
     Deltas longer than _CWL_IDLE_THRESHOLD_SECONDS are treated as the
     facilitator leaving the activity open and excluded from the total. The

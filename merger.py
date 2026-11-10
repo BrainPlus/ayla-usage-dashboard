@@ -1383,8 +1383,8 @@ def build_engagement_events_by_org(
 def build_cwl_library_summary(
     cwl_libraries: pd.DataFrame,
     library_opens: pd.DataFrame,
-    item_opens: pd.DataFrame,
-    item_time_spent: pd.DataFrame,
+    activity_opens: pd.DataFrame,
+    activity_time_spent: pd.DataFrame,
 ) -> pd.DataFrame:
     """
     Builds the per-library summary table for the Cognitive Wellbeing Library.
@@ -1395,19 +1395,20 @@ def build_cwl_library_summary(
                          (database.get_cwl_libraries)
         library_opens:   library_id, user_id, opened_at
                          (matomo.get_cwl_library_opens)
-        item_opens:      library_id, activity_id, user_id, started_at
-                         (matomo.get_cwl_item_opens)
-        item_time_spent: library_id, activity_id, seconds_spent
-                         (matomo.get_cwl_item_time_spent)
+        activity_opens:      library_id, activity_id, user_id, started_at
+                         (matomo.get_cwl_activity_opens)
+        activity_time_spent: library_id, activity_id, seconds_spent
+                         (matomo.get_cwl_activity_time_spent)
 
     Returns:
         DataFrame with columns: library_id, library_name, creator_email,
         organisation_name, created_date, times_opened, distinct_users_opened,
-        distinct_items_opened, total_seconds_spent, last_used_date.
+        distinct_activities_opened, total_seconds_spent, last_used_date.
 
         last_used_date is the most recent of either opening the library
-        itself or starting an item within it, so a library used only to run
-        items (without a fresh dropdown selection in between) still updates.
+        itself or starting an activity within it, so a library used only to
+        run activities (without a fresh dropdown selection in between) still
+        updates.
     """
     summary = cwl_libraries.copy()
 
@@ -1429,24 +1430,24 @@ def build_cwl_library_summary(
             summary["distinct_users_opened"].fillna(0).astype(int)
         )
 
-    if item_opens.empty:
-        summary["distinct_items_opened"] = 0
+    if activity_opens.empty:
+        summary["distinct_activities_opened"] = 0
     else:
-        items_by_library = (
-            item_opens.groupby("library_id")["activity_id"]
+        activities_by_library = (
+            activity_opens.groupby("library_id")["activity_id"]
             .nunique()
-            .reset_index(name="distinct_items_opened")
+            .reset_index(name="distinct_activities_opened")
         )
-        summary = summary.merge(items_by_library, on="library_id", how="left")
-        summary["distinct_items_opened"] = (
-            summary["distinct_items_opened"].fillna(0).astype(int)
+        summary = summary.merge(activities_by_library, on="library_id", how="left")
+        summary["distinct_activities_opened"] = (
+            summary["distinct_activities_opened"].fillna(0).astype(int)
         )
 
-    if item_time_spent.empty:
+    if activity_time_spent.empty:
         summary["total_seconds_spent"] = 0
     else:
         time_by_library = (
-            item_time_spent.groupby("library_id")["seconds_spent"]
+            activity_time_spent.groupby("library_id")["seconds_spent"]
             .sum()
             .reset_index(name="total_seconds_spent")
         )
@@ -1462,9 +1463,9 @@ def build_cwl_library_summary(
                 ["library_id", "used_at"]
             ]
         )
-    if not item_opens.empty:
+    if not activity_opens.empty:
         usage_timestamps.append(
-            item_opens.rename(columns={"started_at": "used_at"})[
+            activity_opens.rename(columns={"started_at": "used_at"})[
                 ["library_id", "used_at"]
             ]
         )
@@ -1476,6 +1477,10 @@ def build_cwl_library_summary(
             .reset_index()
             .rename(columns={"used_at": "last_used_date"})
         )
+        # Truncate to YYYY-MM-DD, matching last_login_date elsewhere in the
+        # app — this column is a quick-glance date, not a precise timestamp
+        # (see build_cwl_usage_log for the full date-and-time-of-use detail).
+        last_used["last_used_date"] = last_used["last_used_date"].str[:10]
         summary = summary.merge(last_used, on="library_id", how="left")
         summary["last_used_date"] = summary["last_used_date"].fillna("")
     else:
@@ -1484,20 +1489,20 @@ def build_cwl_library_summary(
     return summary
 
 
-def build_cwl_item_breakdown(
-    item_opens: pd.DataFrame,
-    item_time_spent: pd.DataFrame,
+def build_cwl_activity_breakdown(
+    activity_opens: pd.DataFrame,
+    activity_time_spent: pd.DataFrame,
     activity_catalogue: dict,
 ) -> pd.DataFrame:
     """
-    Builds a per-(library, item) breakdown: open count, time spent, and
+    Builds a per-(library, activity) breakdown: open count, time spent, and
     resolved activity name.
 
     Args:
-        item_opens:         library_id, activity_id, user_id, started_at
-                            (matomo.get_cwl_item_opens)
-        item_time_spent:    library_id, activity_id, seconds_spent
-                            (matomo.get_cwl_item_time_spent)
+        activity_opens:         library_id, activity_id, user_id, started_at
+                            (matomo.get_cwl_activity_opens)
+        activity_time_spent:    library_id, activity_id, seconds_spent
+                            (matomo.get_cwl_activity_time_spent)
         activity_catalogue: dict mapping activity_id -> title from Squidex.
                             Unknown IDs fall back to the raw ID string.
 
@@ -1513,16 +1518,16 @@ def build_cwl_item_breakdown(
         "open_count",
         "seconds_spent",
     ]
-    if item_opens.empty:
+    if activity_opens.empty:
         return pd.DataFrame(columns=columns)
 
     counts = (
-        item_opens.groupby(["library_id", "activity_id"])
+        activity_opens.groupby(["library_id", "activity_id"])
         .size()
         .reset_index(name="open_count")
     )
     counts = counts.merge(
-        item_time_spent, on=["library_id", "activity_id"], how="left"
+        activity_time_spent, on=["library_id", "activity_id"], how="left"
     )
     counts["seconds_spent"] = counts["seconds_spent"].fillna(0).astype(int)
     counts["activity_name"] = (
@@ -1556,6 +1561,103 @@ def build_cwl_usage_log(library_opens: pd.DataFrame) -> pd.DataFrame:
         .sort_values("opened_at", ascending=False)
         .reset_index(drop=True)
     )
+
+
+def build_cwl_library_summary_table(cwl_library_summary: pd.DataFrame) -> pd.DataFrame:
+    """
+    Shapes build_cwl_library_summary's output for display/export: minutes
+    instead of raw seconds, Title Case headers — same role as
+    build_activity_usage_table for the Activity Usage sheet.
+
+    Args:
+        cwl_library_summary: output of build_cwl_library_summary
+
+    Returns:
+        DataFrame with columns: Library Name, Created By, Organisation,
+        Created Date, Times Opened, Distinct Users, Distinct Activities
+        Opened, Total Time Spent (min), Last Used.
+    """
+    columns = [
+        "Library Name",
+        "Created By",
+        "Organisation",
+        "Created Date",
+        "Times Opened",
+        "Distinct Users",
+        "Distinct Activities Opened",
+        "Total Time Spent (min)",
+        "Last Used",
+    ]
+    if cwl_library_summary.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = cwl_library_summary.copy()
+    df["Total Time Spent (min)"] = (df["total_seconds_spent"] / 60).round(1)
+    df = df.rename(columns={
+        "library_name": "Library Name",
+        "creator_email": "Created By",
+        "organisation_name": "Organisation",
+        "created_date": "Created Date",
+        "times_opened": "Times Opened",
+        "distinct_users_opened": "Distinct Users",
+        "distinct_activities_opened": "Distinct Activities Opened",
+        "last_used_date": "Last Used",
+    })
+    return df[columns]
+
+
+def build_cwl_activity_breakdown_table(
+    cwl_activity_breakdown: pd.DataFrame,
+    library_names: dict,
+) -> pd.DataFrame:
+    """
+    Shapes build_cwl_activity_breakdown's output for display/export.
+
+    Args:
+        cwl_activity_breakdown: output of build_cwl_activity_breakdown
+        library_names:          dict mapping library_id -> library_name
+
+    Returns:
+        DataFrame with columns: Library Name, Activity Name, Open Count,
+        Time Spent (min).
+    """
+    columns = ["Library Name", "Activity Name", "Open Count", "Time Spent (min)"]
+    if cwl_activity_breakdown.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = cwl_activity_breakdown.copy()
+    df["Library Name"] = df["library_id"].map(library_names).fillna(df["library_id"])
+    df["Time Spent (min)"] = (df["seconds_spent"] / 60).round(1)
+    df = df.rename(columns={"activity_name": "Activity Name", "open_count": "Open Count"})
+    return df[columns]
+
+
+def build_cwl_usage_log_table(
+    cwl_usage_log: pd.DataFrame,
+    library_names: dict,
+) -> pd.DataFrame:
+    """
+    Shapes build_cwl_usage_log's output for display/export: resolved library
+    name, timestamp trimmed to minute precision.
+
+    Args:
+        cwl_usage_log:  output of build_cwl_usage_log
+        library_names:  dict mapping library_id -> library_name
+
+    Returns:
+        DataFrame with columns: Library Name, User ID, Opened At.
+    """
+    columns = ["Library Name", "User ID", "Opened At"]
+    if cwl_usage_log.empty:
+        return pd.DataFrame(columns=columns)
+
+    df = cwl_usage_log.copy()
+    df["Library Name"] = df["library_id"].map(library_names).fillna(df["library_id"])
+    df["Opened At"] = pd.to_datetime(
+        df["opened_at"], errors="coerce", utc=True
+    ).dt.strftime("%Y-%m-%d %H:%M")
+    df = df.rename(columns={"user_id": "User ID"})
+    return df[columns]
 
 
 def _normalise_activity_language(value: object) -> str:

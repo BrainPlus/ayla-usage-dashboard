@@ -552,7 +552,7 @@ def test_get_cwl_library_opens_excludes_other_users(monkeypatch) -> None:
     assert result["library_id"].tolist() == ["42"]
 
 
-def test_get_cwl_item_opens_counts_activity_library_start_click_events(
+def test_get_cwl_activity_opens_counts_activity_library_start_click_events(
     monkeypatch,
 ) -> None:
     visits = [
@@ -587,7 +587,7 @@ def test_get_cwl_item_opens_counts_activity_library_start_click_events(
         }
     ]
 
-    result = matomo.get_cwl_item_opens("2024-01-01,2024-01-31", visits=visits)
+    result = matomo.get_cwl_activity_opens("2024-01-01,2024-01-31", visits=visits)
 
     assert result.to_dict("records") == [
         {
@@ -599,7 +599,7 @@ def test_get_cwl_item_opens_counts_activity_library_start_click_events(
     ]
 
 
-def test_get_cwl_item_time_spent_anchors_from_start_click(monkeypatch) -> None:
+def test_get_cwl_activity_time_spent_anchors_from_start_click(monkeypatch) -> None:
     """Start Click -> Forward Click -> Forward Click gives two measured deltas."""
     visits = [
         {
@@ -633,14 +633,14 @@ def test_get_cwl_item_time_spent_anchors_from_start_click(monkeypatch) -> None:
         }
     ]
 
-    result = matomo.get_cwl_item_time_spent("2024-01-01,2024-01-31", visits=visits)
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
 
     assert result.to_dict("records") == [
         {"library_id": "42", "activity_id": "act-123", "seconds_spent": 90}
     ]
 
 
-def test_get_cwl_item_time_spent_excludes_idle_gaps(monkeypatch) -> None:
+def test_get_cwl_activity_time_spent_excludes_idle_gaps(monkeypatch) -> None:
     visits = [
         {
             "userId": "u1",
@@ -665,14 +665,16 @@ def test_get_cwl_item_time_spent_excludes_idle_gaps(monkeypatch) -> None:
         }
     ]
 
-    result = matomo.get_cwl_item_time_spent("2024-01-01,2024-01-31", visits=visits)
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
 
     assert result.empty
 
 
-def test_get_cwl_item_time_spent_keeps_different_items_isolated(monkeypatch) -> None:
-    """A gap between finishing one item and starting another must not count
-    towards either item's total."""
+def test_get_cwl_activity_time_spent_keeps_different_activities_isolated(
+    monkeypatch,
+) -> None:
+    """A gap between finishing one activity and starting another must not
+    count towards either activity's total."""
     visits = [
         {
             "userId": "u1",
@@ -693,7 +695,7 @@ def test_get_cwl_item_time_spent_keeps_different_items_isolated(monkeypatch) -> 
                     "dimension6": "act-123",
                     "timestamp": 20,
                 },
-                # Browsing back to the library and picking a different item —
+                # Browsing back to the library and picking a different activity —
                 # this gap must not be attributed to act-123 or act-456.
                 {
                     "type": "event",
@@ -715,7 +717,7 @@ def test_get_cwl_item_time_spent_keeps_different_items_isolated(monkeypatch) -> 
         }
     ]
 
-    result = matomo.get_cwl_item_time_spent("2024-01-01,2024-01-31", visits=visits)
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
 
     assert result.sort_values("activity_id").to_dict("records") == [
         {"library_id": "42", "activity_id": "act-123", "seconds_spent": 20},
@@ -723,7 +725,7 @@ def test_get_cwl_item_time_spent_keeps_different_items_isolated(monkeypatch) -> 
     ]
 
 
-def test_get_cwl_item_time_spent_excludes_other_users(monkeypatch) -> None:
+def test_get_cwl_activity_time_spent_excludes_other_users(monkeypatch) -> None:
     visits = [
         {
             "userId": "u1",
@@ -769,7 +771,7 @@ def test_get_cwl_item_time_spent_excludes_other_users(monkeypatch) -> None:
         },
     ]
 
-    result = matomo.get_cwl_item_time_spent(
+    result = matomo.get_cwl_activity_time_spent(
         "2024-01-01,2024-01-31", frozenset({"u1"}), visits=visits
     )
 

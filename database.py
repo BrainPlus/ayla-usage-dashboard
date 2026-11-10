@@ -219,7 +219,13 @@ def get_cwl_libraries(region: str, org_id=None) -> pd.DataFrame:
         ORDER BY organisation_name, library_name, cwl.id
     """)
     with get_engine(region).connect() as conn:
-        return pd.read_sql(sql, conn, params=params)
+        df = pd.read_sql(sql, conn, params=params)
+    # Without this, pandas infers a datetime64 dtype for created_date, and
+    # Streamlit's TextColumn renders that as a raw epoch-millisecond number
+    # instead of a date — cast to a plain "YYYY-MM-DD" string up front, same
+    # as every other displayed date in this app.
+    df["created_date"] = df["created_date"].astype(str)
+    return df
 
 
 @st.cache_data(ttl=_DB_CACHE_TTL)

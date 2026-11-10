@@ -48,7 +48,7 @@ _REPORT_DATA_KEYS = (
     "engagement_events",
     "daily_visit_activity",
     "cwl_library_summary",
-    "cwl_item_breakdown",
+    "cwl_activity_breakdown",
     "cwl_usage_log",
     "region",
     "date_range",
@@ -187,13 +187,13 @@ _SECTION_HELP = {
     "cwl_library_summary": (
         "One row per Cognitive Wellbeing Library. Times Opened counts dropdown "
         "selections, including the auto-select right after a library is created. "
-        "Total Time Spent is an approximation — see the Item Breakdown help for "
-        "the methodology."
+        "Total Time Spent is an approximation — see the Activity Breakdown help "
+        "for the methodology."
     ),
-    "cwl_item_breakdown": (
-        "One row per item opened within a library. Open Count is based on the "
-        "'Start Click' event — actually running the item, not just viewing its "
-        "detail dialog. Time Spent approximates engagement via the delta "
+    "cwl_activity_breakdown": (
+        "One row per activity opened within a library. Open Count is based on "
+        "the 'Start Click' event — actually running the activity, not just "
+        "viewing its detail dialog. Time Spent approximates engagement via the delta "
         "between consecutive navigation clicks within a run, capped at 10 "
         "minutes of idle time between clicks; the final interval of each run "
         "is not measured, since there is no 'activity closed' event to bound it."
@@ -870,13 +870,13 @@ if pull:
                 query_org_scope,
                 visits=live_visits,
             )
-            cwl_item_opens = matomo.get_cwl_item_opens(
+            cwl_activity_opens = matomo.get_cwl_activity_opens(
                 date_range,
                 database_user_ids,
                 query_org_scope,
                 visits=live_visits,
             )
-            cwl_item_time_spent = matomo.get_cwl_item_time_spent(
+            cwl_activity_time_spent = matomo.get_cwl_activity_time_spent(
                 date_range,
                 database_user_ids,
                 query_org_scope,
@@ -912,8 +912,8 @@ if pull:
         cwl_library_opens = _filter_to_database_users(
             cwl_library_opens, database_user_ids
         )
-        cwl_item_opens = _filter_to_database_users(
-            cwl_item_opens, database_user_ids
+        cwl_activity_opens = _filter_to_database_users(
+            cwl_activity_opens, database_user_ids
         )
 
         # Step 3 — Last login per user (slowest — show progress)
@@ -985,10 +985,10 @@ if pull:
                 visit_dates, start_date, end_date
             )
             cwl_library_summary = merger.build_cwl_library_summary(
-                cwl_libraries, cwl_library_opens, cwl_item_opens, cwl_item_time_spent
+                cwl_libraries, cwl_library_opens, cwl_activity_opens, cwl_activity_time_spent
             )
-            cwl_item_breakdown = merger.build_cwl_item_breakdown(
-                cwl_item_opens, cwl_item_time_spent, activity_catalogue
+            cwl_activity_breakdown = merger.build_cwl_activity_breakdown(
+                cwl_activity_opens, cwl_activity_time_spent, activity_catalogue
             )
             cwl_usage_log = merger.build_cwl_usage_log(cwl_library_opens)
 
@@ -1010,7 +1010,7 @@ if pull:
             "engagement_events": engagement_events,
             "daily_visit_activity": daily_visit_activity,
             "cwl_library_summary": cwl_library_summary,
-            "cwl_item_breakdown": cwl_item_breakdown,
+            "cwl_activity_breakdown": cwl_activity_breakdown,
             "cwl_usage_log": cwl_usage_log,
             "region": region,
             "date_range": date_range,
@@ -1789,32 +1789,19 @@ else:
         if _cwl_library_summary.empty:
             st.info("No Cognitive Wellbeing Libraries found for the selected scope.")
         else:
-            _cwl_display = _cwl_library_summary.copy()
-            _cwl_display["total_minutes_spent"] = (
-                _cwl_display["total_seconds_spent"] / 60
-            ).round(1)
+            _cwl_summary_table = merger.build_cwl_library_summary_table(
+                _cwl_library_summary
+            )
             st.dataframe(
-                _cwl_display.drop(columns=["library_id", "total_seconds_spent"]),
+                _cwl_summary_table,
                 use_container_width=True,
                 hide_index=True,
                 column_config=_column_config_for(
-                    _cwl_display,
+                    _cwl_summary_table,
                     {
-                        "library_name": st.column_config.TextColumn("Library Name"),
-                        "organisation_name": st.column_config.TextColumn("Organisation"),
-                        "creator_email": st.column_config.TextColumn("Created By"),
-                        "created_date": st.column_config.TextColumn("Created Date"),
-                        "times_opened": st.column_config.NumberColumn("Times Opened"),
-                        "distinct_users_opened": st.column_config.NumberColumn(
-                            "Distinct Users"
-                        ),
-                        "distinct_items_opened": st.column_config.NumberColumn(
-                            "Distinct Items Opened"
-                        ),
-                        "total_minutes_spent": st.column_config.NumberColumn(
+                        "Total Time Spent (min)": st.column_config.NumberColumn(
                             "Total Time Spent (min)", format="%.1f"
                         ),
-                        "last_used_date": st.column_config.TextColumn("Last Used"),
                     },
                 ),
             )
@@ -1824,60 +1811,66 @@ else:
             ]
 
             st.markdown(
-                "**Item Breakdown**", help=_SECTION_HELP["cwl_item_breakdown"]
+                "**Activity Breakdown**", help=_SECTION_HELP["cwl_activity_breakdown"]
             )
-            _cwl_item_breakdown = st.session_state.get(
-                "cwl_item_breakdown", pd.DataFrame()
+            _cwl_activity_breakdown = st.session_state.get(
+                "cwl_activity_breakdown", pd.DataFrame()
             )
-            if _cwl_item_breakdown.empty:
+            if _cwl_activity_breakdown.empty:
                 st.info("No activities started in any library for the selected scope.")
             else:
-                _item_display = _cwl_item_breakdown.copy()
-                _item_display["library_name"] = _item_display["library_id"].map(
-                    _library_names
+                _cwl_activity_catalogue = st.session_state.get(
+                    "activity_catalogue", {}
                 )
-                _item_display["minutes_spent"] = (
-                    _item_display["seconds_spent"] / 60
-                ).round(1)
+                _cwl_breakdown_table = merger.build_cwl_activity_breakdown_table(
+                    _cwl_activity_breakdown, _library_names
+                )
                 st.dataframe(
-                    _item_display[
-                        [
-                            "library_name",
-                            "activity_name",
-                            "open_count",
-                            "minutes_spent",
-                        ]
-                    ],
+                    _cwl_breakdown_table,
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "library_name": st.column_config.TextColumn("Library Name"),
-                        "activity_name": st.column_config.TextColumn("Item Name"),
-                        "open_count": st.column_config.NumberColumn("Open Count"),
-                        "minutes_spent": st.column_config.NumberColumn(
-                            "Time Spent (min)", format="%.1f"
-                        ),
-                    },
+                    column_config=_column_config_for(
+                        _cwl_breakdown_table,
+                        {
+                            "Time Spent (min)": st.column_config.NumberColumn(
+                                "Time Spent (min)", format="%.1f"
+                            ),
+                        },
+                    ),
                 )
+                _cwl_catalogue_stats = merger.activity_catalogue_match_stats(
+                    _cwl_activity_breakdown, _cwl_activity_catalogue
+                )
+                if _cwl_catalogue_stats["usage_ids"] > 0:
+                    if _cwl_catalogue_stats["catalogue_ids"] == 0:
+                        st.warning(
+                            "Activity names are not available because the Squidex "
+                            "catalogue returned 0 activities. Check the Squidex secrets."
+                        )
+                    elif _cwl_catalogue_stats["matched_ids"] == 0:
+                        st.warning(
+                            "Activity names are not available because none of the "
+                            f"{_cwl_catalogue_stats['usage_ids']} Matomo activity IDs "
+                            f"match the {_cwl_catalogue_stats['catalogue_ids']} "
+                            "Squidex activity IDs. Check that `squidex_project` points "
+                            "at the same Squidex app/environment used by the tracked app."
+                        )
+                    elif _cwl_catalogue_stats["unmatched_ids"] > 0:
+                        st.warning(
+                            f"{_cwl_catalogue_stats['unmatched_ids']} of "
+                            f"{_cwl_catalogue_stats['usage_ids']} Matomo activity IDs "
+                            "could not be resolved to Squidex activity titles."
+                        )
 
             st.markdown("**Usage Log**", help=_SECTION_HELP["cwl_usage_log"])
             _cwl_usage_log = st.session_state.get("cwl_usage_log", pd.DataFrame())
             if _cwl_usage_log.empty:
                 st.info("No library opens recorded for the selected scope.")
             else:
-                _log_display = _cwl_usage_log.copy()
-                _log_display["library_name"] = _log_display["library_id"].map(
-                    _library_names
-                )
                 st.dataframe(
-                    _log_display[["library_name", "user_id", "opened_at"]],
+                    merger.build_cwl_usage_log_table(_cwl_usage_log, _library_names),
                     use_container_width=True,
                     hide_index=True,
-                    column_config={
-                        "library_name": st.column_config.TextColumn("Library Name"),
-                        "user_id": st.column_config.TextColumn("User ID"),
-                        "opened_at": st.column_config.TextColumn("Opened At"),
-                    },
                 )
 
 
@@ -1891,6 +1884,14 @@ if "user_detail" in st.session_state:
         _download_activity_usage,
         _download_activity_language_filter,
     )
+    _download_cwl_library_summary = st.session_state.get(
+        "cwl_library_summary", pd.DataFrame()
+    )
+    _download_cwl_library_names = (
+        _download_cwl_library_summary.set_index("library_id")["library_name"]
+        if not _download_cwl_library_summary.empty
+        else {}
+    )
     excel_bytes = exporter.build_excel_report(
         st.session_state["user_detail"],
         st.session_state["org_summary"],
@@ -1902,6 +1903,17 @@ if "user_detail" in st.session_state:
             st.session_state.get("activity_catalogue", {}),
         ),
         bundle_progression=st.session_state.get("bundle_progression", pd.DataFrame()),
+        cwl_library_summary_table=merger.build_cwl_library_summary_table(
+            _download_cwl_library_summary
+        ),
+        cwl_activity_breakdown_table=merger.build_cwl_activity_breakdown_table(
+            st.session_state.get("cwl_activity_breakdown", pd.DataFrame()),
+            _download_cwl_library_names,
+        ),
+        cwl_usage_log_table=merger.build_cwl_usage_log_table(
+            st.session_state.get("cwl_usage_log", pd.DataFrame()),
+            _download_cwl_library_names,
+        ),
         org_filter_name=(
             None
             if st.session_state.get("fetched_org_id") is None

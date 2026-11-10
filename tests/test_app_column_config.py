@@ -32,10 +32,7 @@ def test_last_login_date_columns_are_text() -> None:
 
 
 def test_user_id_column_is_text() -> None:
-    assert _column_config_constructor_names("user_id") == [
-        "TextColumn",
-        "TextColumn",
-    ]
+    assert _column_config_constructor_names("user_id") == ["TextColumn"]
 
 
 def test_completed_sessions_are_configured_for_organisation_and_user_tables() -> None:
