@@ -47,6 +47,9 @@ _REPORT_DATA_KEYS = (
     "media_usage",
     "engagement_events",
     "daily_visit_activity",
+    "cwl_library_summary",
+    "cwl_activity_breakdown",
+    "cwl_usage_log",
     "region",
     "date_range",
     "fetched_region",
@@ -180,6 +183,24 @@ _SECTION_HELP = {
     "daily_visit_activity": (
         "Daily number of Matomo visits and unique users during the selected reporting period. "
         "A Matomo visit represents one continuous browser session."
+    ),
+    "cwl_library_summary": (
+        "One row per Cognitive Wellbeing Library. Times Opened counts dropdown "
+        "selections, including the auto-select right after a library is created. "
+        "Total Time Spent is an approximation — see the Activity Breakdown help "
+        "for the methodology."
+    ),
+    "cwl_activity_breakdown": (
+        "One row per activity opened within a library. Open Count is based on "
+        "the 'Start Click' event — actually running the activity, not just "
+        "viewing its detail dialog. Time Spent approximates engagement via the delta "
+        "between consecutive navigation clicks within a run, capped at 10 "
+        "minutes of idle time between clicks; the final interval of each run "
+        "is not measured, since there is no 'activity closed' event to bound it."
+    ),
+    "cwl_usage_log": (
+        "Every time a library was opened (selected from the dropdown, or "
+        "auto-selected right after creation), with the user and timestamp."
     ),
 }
 
@@ -718,6 +739,9 @@ if pull:
             bundle_counts = database.get_bundle_counts_per_org(
                 region, org_id=query_org_scope
             )
+            cwl_libraries = database.get_cwl_libraries(
+                region, org_id=query_org_scope
+            )
             bundle_configurations = (
                 pd.DataFrame()
                 if skip_bundle_history
@@ -840,6 +864,24 @@ if pull:
                 query_org_scope,
                 visits=live_visits,
             )
+            cwl_library_opens = matomo.get_cwl_library_opens(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
+            cwl_activity_opens = matomo.get_cwl_activity_opens(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
+            cwl_activity_time_spent = matomo.get_cwl_activity_time_spent(
+                date_range,
+                database_user_ids,
+                query_org_scope,
+                visits=live_visits,
+            )
         _update_pull_progress(0.72, "Matomo analytics complete")
 
         # Raw aggregates must be scoped to selected-region DB users before aggregation.
@@ -866,6 +908,12 @@ if pull:
         media_usage = _filter_to_database_users(media_usage, database_user_ids)
         engagement_events = _filter_to_database_users(
             engagement_events, database_user_ids
+        )
+        cwl_library_opens = _filter_to_database_users(
+            cwl_library_opens, database_user_ids
+        )
+        cwl_activity_opens = _filter_to_database_users(
+            cwl_activity_opens, database_user_ids
         )
 
         # Step 3 — Last login per user (slowest — show progress)
@@ -936,6 +984,13 @@ if pull:
             daily_visit_activity = merger.build_daily_visit_activity(
                 visit_dates, start_date, end_date
             )
+            cwl_library_summary = merger.build_cwl_library_summary(
+                cwl_libraries, cwl_library_opens, cwl_activity_opens, cwl_activity_time_spent
+            )
+            cwl_activity_breakdown = merger.build_cwl_activity_breakdown(
+                cwl_activity_opens, cwl_activity_time_spent, activity_catalogue
+            )
+            cwl_usage_log = merger.build_cwl_usage_log(cwl_library_opens)
 
         st.session_state.update({
             "user_detail": user_detail,
@@ -954,6 +1009,9 @@ if pull:
             "media_usage": media_usage,
             "engagement_events": engagement_events,
             "daily_visit_activity": daily_visit_activity,
+            "cwl_library_summary": cwl_library_summary,
+            "cwl_activity_breakdown": cwl_activity_breakdown,
+            "cwl_usage_log": cwl_usage_log,
             "region": region,
             "date_range": date_range,
             "fetched_region": region,
@@ -986,10 +1044,12 @@ if pull:
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
 
-tab1, tab2, tab3 = st.tabs(["Global Overview", "By Organisation", "By User"])
+tab1, tab2, tab3, tab4 = st.tabs(
+    ["Global Overview", "By Organisation", "By User", "Cognitive Wellbeing"]
+)
 
 if "global_summary" not in st.session_state:
-    for tab in (tab1, tab2, tab3):
+    for tab in (tab1, tab2, tab3, tab4):
         with tab:
             st.info("Select a region and date range in the sidebar, then click **Pull Data**.")
 else:
@@ -1717,6 +1777,102 @@ else:
             use_container_width=True,
         )
 
+    # ── Tab 4: Cognitive Wellbeing ─────────────────────────────────────────────
+    with tab4:
+        st.subheader(
+            "Cognitive Wellbeing Libraries",
+            help=_SECTION_HELP["cwl_library_summary"],
+        )
+        _cwl_library_summary = st.session_state.get(
+            "cwl_library_summary", pd.DataFrame()
+        )
+        if _cwl_library_summary.empty:
+            st.info("No Cognitive Wellbeing Libraries found for the selected scope.")
+        else:
+            _cwl_summary_table = merger.build_cwl_library_summary_table(
+                _cwl_library_summary
+            )
+            st.dataframe(
+                _cwl_summary_table,
+                use_container_width=True,
+                hide_index=True,
+                column_config=_column_config_for(
+                    _cwl_summary_table,
+                    {
+                        "Total Time Spent (min)": st.column_config.NumberColumn(
+                            "Total Time Spent (min)", format="%.1f"
+                        ),
+                    },
+                ),
+            )
+
+            _library_names = _cwl_library_summary.set_index("library_id")[
+                "library_name"
+            ]
+
+            st.markdown(
+                "**Activity Breakdown**", help=_SECTION_HELP["cwl_activity_breakdown"]
+            )
+            _cwl_activity_breakdown = st.session_state.get(
+                "cwl_activity_breakdown", pd.DataFrame()
+            )
+            if _cwl_activity_breakdown.empty:
+                st.info("No activities started in any library for the selected scope.")
+            else:
+                _cwl_activity_catalogue = st.session_state.get(
+                    "activity_catalogue", {}
+                )
+                _cwl_breakdown_table = merger.build_cwl_activity_breakdown_table(
+                    _cwl_activity_breakdown, _library_names
+                )
+                st.dataframe(
+                    _cwl_breakdown_table,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config=_column_config_for(
+                        _cwl_breakdown_table,
+                        {
+                            "Time Spent (min)": st.column_config.NumberColumn(
+                                "Time Spent (min)", format="%.1f"
+                            ),
+                        },
+                    ),
+                )
+                _cwl_catalogue_stats = merger.activity_catalogue_match_stats(
+                    _cwl_activity_breakdown, _cwl_activity_catalogue
+                )
+                if _cwl_catalogue_stats["usage_ids"] > 0:
+                    if _cwl_catalogue_stats["catalogue_ids"] == 0:
+                        st.warning(
+                            "Activity names are not available because the Squidex "
+                            "catalogue returned 0 activities. Check the Squidex secrets."
+                        )
+                    elif _cwl_catalogue_stats["matched_ids"] == 0:
+                        st.warning(
+                            "Activity names are not available because none of the "
+                            f"{_cwl_catalogue_stats['usage_ids']} Matomo activity IDs "
+                            f"match the {_cwl_catalogue_stats['catalogue_ids']} "
+                            "Squidex activity IDs. Check that `squidex_project` points "
+                            "at the same Squidex app/environment used by the tracked app."
+                        )
+                    elif _cwl_catalogue_stats["unmatched_ids"] > 0:
+                        st.warning(
+                            f"{_cwl_catalogue_stats['unmatched_ids']} of "
+                            f"{_cwl_catalogue_stats['usage_ids']} Matomo activity IDs "
+                            "could not be resolved to Squidex activity titles."
+                        )
+
+            st.markdown("**Usage Log**", help=_SECTION_HELP["cwl_usage_log"])
+            _cwl_usage_log = st.session_state.get("cwl_usage_log", pd.DataFrame())
+            if _cwl_usage_log.empty:
+                st.info("No library opens recorded for the selected scope.")
+            else:
+                st.dataframe(
+                    merger.build_cwl_usage_log_table(_cwl_usage_log, _library_names),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
 
 # ── download button ───────────────────────────────────────────────────────────
 
@@ -1727,6 +1883,14 @@ if "user_detail" in st.session_state:
     _download_activity_usage = merger.filter_activity_usage_by_language(
         _download_activity_usage,
         _download_activity_language_filter,
+    )
+    _download_cwl_library_summary = st.session_state.get(
+        "cwl_library_summary", pd.DataFrame()
+    )
+    _download_cwl_library_names = (
+        _download_cwl_library_summary.set_index("library_id")["library_name"]
+        if not _download_cwl_library_summary.empty
+        else {}
     )
     excel_bytes = exporter.build_excel_report(
         st.session_state["user_detail"],
@@ -1739,6 +1903,17 @@ if "user_detail" in st.session_state:
             st.session_state.get("activity_catalogue", {}),
         ),
         bundle_progression=st.session_state.get("bundle_progression", pd.DataFrame()),
+        cwl_library_summary_table=merger.build_cwl_library_summary_table(
+            _download_cwl_library_summary
+        ),
+        cwl_activity_breakdown_table=merger.build_cwl_activity_breakdown_table(
+            st.session_state.get("cwl_activity_breakdown", pd.DataFrame()),
+            _download_cwl_library_names,
+        ),
+        cwl_usage_log_table=merger.build_cwl_usage_log_table(
+            st.session_state.get("cwl_usage_log", pd.DataFrame()),
+            _download_cwl_library_names,
+        ),
         org_filter_name=(
             None
             if st.session_state.get("fetched_org_id") is None

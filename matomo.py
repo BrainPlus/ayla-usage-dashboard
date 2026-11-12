@@ -32,6 +32,11 @@ _ACTIVE_DELIVERY_EVENTS = frozenset(
     }
 )
 
+# Deltas longer than this are treated as "left the activity open" and
+# excluded from Cognitive Wellbeing Library time-spent totals — matches
+# IDLE_THRESHOLD_S in explore_talking_point_time.py's CST methodology.
+_CWL_IDLE_THRESHOLD_SECONDS = 600
+
 # Keep org_id on bulk-query signatures for caller/cache compatibility. Do not
 # send dimension13 as a source segment: production checks found 56-78% undercounting.
 
@@ -828,6 +833,227 @@ def get_engagement_events(
     return df
 
 
+def get_cwl_library_opens(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+    visits: list[dict] | None = None,
+) -> pd.DataFrame:
+    """
+    Fetches every Cognitive Wellbeing Library "opened" event — selected from
+    the dropdown, including the auto-select right after creating a new library.
+
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
+    eventCategory: Cognitive Wellbeing, eventAction: Library Selected From Dropdown
+
+    Not scoped to dimension10 (editMode) — the Cognitive Wellbeing Library track
+    has no prepare/deliver concept.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: library_id (str), user_id (str),
+        opened_at (str, ISO datetime). One row per open event.
+    """
+    columns = ["library_id", "user_id", "opened_at"]
+    data = _live_visits(date_range, visits)
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+        for action in visit.get("actionDetails", []):
+            if (
+                action.get("type") != "event"
+                or action.get("eventCategory") != "Cognitive Wellbeing"
+                or action.get("eventAction") != "Library Selected From Dropdown"
+            ):
+                continue
+            library_id = _extract_dimension(action, "3")
+            if not library_id:
+                continue
+            rows.append(
+                {
+                    "library_id": library_id,
+                    "user_id": user_id,
+                    "opened_at": _event_datetime(action, visit),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame(rows)
+    df["library_id"] = df["library_id"].astype(str)
+    df["user_id"] = df["user_id"].astype(str)
+    return df
+
+
+def get_cwl_activity_opens(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+    visits: list[dict] | None = None,
+) -> pd.DataFrame:
+    """
+    Fetches every activity-open event within the Cognitive Wellbeing Library.
+
+    Matomo method: Live.getLastVisitsDetails (no segment — filtered per action in Python)
+    eventCategory: Activity, eventAction: Activity Library - Start Click
+
+    "Start Click" (not "Card Click") is used as the canonical "activity
+    started" signal: it only fires when a facilitator actually runs the
+    activity, not just views its detail dialog.
+
+    Not scoped to dimension10 (editMode) — the Cognitive Wellbeing Library
+    track has no prepare/deliver concept.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: library_id (str), activity_id (str),
+        user_id (str), started_at (str, ISO datetime). One row per start event.
+    """
+    columns = ["library_id", "activity_id", "user_id", "started_at"]
+    data = _live_visits(date_range, visits)
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+        for action in visit.get("actionDetails", []):
+            if (
+                action.get("type") != "event"
+                or action.get("eventCategory") != "Activity"
+                or action.get("eventAction") != "Activity Library - Start Click"
+            ):
+                continue
+            library_id = _extract_dimension(action, "3")
+            if not library_id:
+                continue
+            rows.append(
+                {
+                    "library_id": library_id,
+                    "activity_id": _extract_dimension(action, "6"),
+                    "user_id": user_id,
+                    "started_at": _event_datetime(action, visit),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    df = pd.DataFrame(rows)
+    df["library_id"] = df["library_id"].astype(str)
+    df["activity_id"] = df["activity_id"].astype(str)
+    df["user_id"] = df["user_id"].astype(str)
+    return df
+
+
+def get_cwl_activity_time_spent(
+    date_range: str,
+    allowed_user_ids: frozenset[str] | None = None,
+    org_id=None,
+    visits: list[dict] | None = None,
+) -> pd.DataFrame:
+    """
+    Approximates time spent per activity within the Cognitive Wellbeing Library.
+
+    Method: delta between consecutive 'Step Forward Click' events (dimension3
+    present) within the same visit and (library_id, activity_id) pair, sorted
+    by timestamp — the same approach as the CST "Talking-Point Engagement
+    (Approximate)" methodology (see explore_talking_point_time.py). Also
+    anchors the first interval from 'Activity Library - Start Click', so
+    activities with fewer than two forward clicks still register measured
+    time (CWL activities are often short — a single card or video).
+
+    Grouping by (library_id, activity_id) — not just by visit — prevents the
+    gap between finishing one activity and starting a different one in the
+    same visit from being counted as time spent on either.
+
+    Deltas longer than _CWL_IDLE_THRESHOLD_SECONDS are treated as the
+    facilitator leaving the activity open and excluded from the total. The
+    final interval after the last forward click is never measured, since
+    there is no "activity closed" event to bound it.
+
+    Not scoped to dimension10 (editMode) — the Cognitive Wellbeing Library
+    track has no prepare/deliver concept.
+
+    Args:
+        date_range: "YYYY-MM-DD,YYYY-MM-DD"
+        allowed_user_ids: optional set of Matomo user IDs to include
+
+    Returns:
+        DataFrame with columns: library_id (str), activity_id (str),
+        seconds_spent (int). One row per (library_id, activity_id) pair,
+        summed across all measured intervals.
+    """
+    columns = ["library_id", "activity_id", "seconds_spent"]
+    data = _live_visits(date_range, visits)
+
+    if not data:
+        return pd.DataFrame(columns=columns)
+
+    totals: dict[tuple[str, str], int] = {}
+
+    for visit in data:
+        user_id = str(visit.get("userId", ""))
+        if allowed_user_ids is not None and user_id not in allowed_user_ids:
+            continue
+
+        runs: dict[tuple[str, str], list[int]] = {}
+        for action in visit.get("actionDetails", []):
+            if action.get("type") != "event" or action.get("eventCategory") != "Activity":
+                continue
+            if action.get("eventAction") not in (
+                "Step Forward Click",
+                "Activity Library - Start Click",
+            ):
+                continue
+            library_id = _extract_dimension(action, "3")
+            if not library_id:
+                continue
+            timestamp = action.get("timestamp")
+            if timestamp is None:
+                continue
+            key = (library_id, _extract_dimension(action, "6"))
+            runs.setdefault(key, []).append(int(timestamp))
+
+        for key, timestamps in runs.items():
+            if len(timestamps) < 2:
+                continue
+            timestamps.sort()
+            for current, following in zip(timestamps, timestamps[1:]):
+                delta = following - current
+                if delta <= 0 or delta > _CWL_IDLE_THRESHOLD_SECONDS:
+                    continue
+                totals[key] = totals.get(key, 0) + delta
+
+    if not totals:
+        return pd.DataFrame(columns=columns)
+
+    df = pd.DataFrame(
+        [
+            {"library_id": k[0], "activity_id": k[1], "seconds_spent": v}
+            for k, v in totals.items()
+        ]
+    )
+    df["library_id"] = df["library_id"].astype(str)
+    df["activity_id"] = df["activity_id"].astype(str)
+    df["seconds_spent"] = df["seconds_spent"].astype(int)
+    return df
+
+
 # --- helpers ---
 
 
@@ -919,6 +1145,22 @@ def _event_date(action: dict, visit: dict) -> str:
         or ""
     )
     return str(raw)[:10]
+
+
+def _event_datetime(action: dict, visit: dict) -> str:
+    """Return an event's full ISO-8601 datetime, falling back to its visit's last action time."""
+    timestamp = pd.to_datetime(action.get("timestamp"), unit="s", utc=True, errors="coerce")
+    if pd.notna(timestamp):
+        return timestamp.isoformat()
+
+    raw = (
+        action.get("serverDate")
+        or action.get("serverDateTime")
+        or visit.get("lastActionDateTime")
+        or visit.get("serverDate")
+        or ""
+    )
+    return str(raw)
 
 
 def _extract_dimension(obj: dict, dim_number: str) -> str:

@@ -51,6 +51,7 @@ def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> No
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_bundle_configurations",
+            "get_cwl_libraries",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -65,6 +66,7 @@ def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> No
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_bundle_configurations",
+            "get_cwl_libraries",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -79,6 +81,7 @@ def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> No
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_bundle_configurations",
+            "get_cwl_libraries",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -98,6 +101,7 @@ def test_get_engine_does_not_retain_idle_database_connections(monkeypatch) -> No
             "get_org_user_counts",
             "get_bundle_counts_per_org",
             "get_bundle_configurations",
+            "get_cwl_libraries",
             "get_monthly_bundle_creations",
             "get_bundle_filter_breakdown",
             "get_star_ratings_by_org",
@@ -122,6 +126,8 @@ def test_database_queries_apply_organisation_filter(
             return pd.DataFrame(
                 columns=["user_id", "email", "organisation_name"]
             )
+        if function_name == "get_cwl_libraries":
+            return pd.DataFrame(columns=["library_id", "created_date"])
         return pd.DataFrame()
 
     monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
@@ -236,6 +242,55 @@ def test_get_bundle_configurations_reads_ordered_session_ids_without_select_star
     assert "WITH ORDINALITY" in captured["sql"]
     assert "b.created_at::date AS created_date" in captured["sql"]
     assert "SELECT * FROM bundles" not in captured["sql"]
+
+
+def test_get_cwl_libraries_joins_creator_email_and_organisation(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def fake_read_sql(sql, conn, params=None):
+        captured["sql"] = str(sql)
+        return pd.DataFrame(columns=["library_id", "created_date"])
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+
+    database.get_cwl_libraries("eu")
+
+    assert "cwl.id::text AS library_id" in captured["sql"]
+    assert "cwl.name AS library_name" in captured["sql"]
+    assert "u.email AS creator_email" in captured["sql"]
+    assert "cwl.created_at::date AS created_date" in captured["sql"]
+    assert "FROM cognitive_wellbeing_libraries cwl" in captured["sql"]
+    assert "JOIN users u ON u.id = cwl.user_id" in captured["sql"]
+    assert "ORDER BY organisation_name, library_name, cwl.id" in captured["sql"]
+
+
+def test_get_cwl_libraries_created_date_is_a_plain_string(monkeypatch) -> None:
+    """A datetime64-typed created_date (as Postgres DATE columns are often
+    inferred) must be cast to a plain string — otherwise Streamlit's
+    TextColumn renders it as a raw epoch-millisecond number."""
+
+    def fake_read_sql(sql, conn, params=None):
+        return pd.DataFrame(
+            {
+                "library_id": ["1"],
+                "library_name": ["Monday Group"],
+                "creator_email": ["t@example.com"],
+                "organisation_name": ["Org A"],
+                "created_date": pd.to_datetime(["2026-01-01"]),
+            }
+        )
+
+    monkeypatch.setattr(database, "get_engine", lambda region: _Engine())
+    monkeypatch.setattr(database.pd, "read_sql", fake_read_sql)
+    database.get_cwl_libraries.clear()
+
+    result = database.get_cwl_libraries("eu")
+
+    assert result.iloc[0]["created_date"] == "2026-01-01"
+    assert isinstance(result.iloc[0]["created_date"], str)
 
 
 def test_monthly_bundle_creations_use_canonical_database_timestamp(monkeypatch) -> None:

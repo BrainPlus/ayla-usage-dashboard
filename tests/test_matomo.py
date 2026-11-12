@@ -476,6 +476,308 @@ def test_get_activity_usage_by_id_allowed_user_ids_excludes_other_users(monkeypa
     ]
 
 
+def test_get_cwl_library_opens_counts_library_selected_events(monkeypatch) -> None:
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Cognitive Wellbeing",
+                    "eventAction": "Library Selected From Dropdown",
+                    "dimension3": "42",
+                    "timestamp": 1700000000,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Cognitive Wellbeing",
+                    "eventAction": "Create Library Dialog Opened",
+                    "dimension3": "42",
+                    "timestamp": 1700000001,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Cognitive Wellbeing",
+                    "eventAction": "Library Selected From Dropdown",
+                    "dimension3": "",
+                    "timestamp": 1700000002,
+                },
+            ],
+        }
+    ]
+
+    result = matomo.get_cwl_library_opens("2024-01-01,2024-01-31", visits=visits)
+
+    assert result.to_dict("records") == [
+        {
+            "library_id": "42",
+            "user_id": "u1",
+            "opened_at": pd.Timestamp(1700000000, unit="s", tz="UTC").isoformat(),
+        }
+    ]
+
+
+def test_get_cwl_library_opens_excludes_other_users(monkeypatch) -> None:
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Cognitive Wellbeing",
+                    "eventAction": "Library Selected From Dropdown",
+                    "dimension3": "42",
+                    "timestamp": 1700000000,
+                }
+            ],
+        },
+        {
+            "userId": "u2",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Cognitive Wellbeing",
+                    "eventAction": "Library Selected From Dropdown",
+                    "dimension3": "99",
+                    "timestamp": 1700000000,
+                }
+            ],
+        },
+    ]
+
+    result = matomo.get_cwl_library_opens(
+        "2024-01-01,2024-01-31", frozenset({"u1"}), visits=visits
+    )
+
+    assert result["library_id"].tolist() == ["42"]
+
+
+def test_get_cwl_activity_opens_counts_activity_library_start_click_events(
+    monkeypatch,
+) -> None:
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library Card Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 1700000000,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 1700000001,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "",
+                    "dimension6": "act-456",
+                    "timestamp": 1700000002,
+                },
+            ],
+        }
+    ]
+
+    result = matomo.get_cwl_activity_opens("2024-01-01,2024-01-31", visits=visits)
+
+    assert result.to_dict("records") == [
+        {
+            "library_id": "42",
+            "activity_id": "act-123",
+            "user_id": "u1",
+            "started_at": pd.Timestamp(1700000001, unit="s", tz="UTC").isoformat(),
+        }
+    ]
+
+
+def test_get_cwl_activity_time_spent_anchors_from_start_click(monkeypatch) -> None:
+    """Start Click -> Forward Click -> Forward Click gives two measured deltas."""
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 1000,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 1030,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 1090,
+                },
+            ],
+        }
+    ]
+
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
+
+    assert result.to_dict("records") == [
+        {"library_id": "42", "activity_id": "act-123", "seconds_spent": 90}
+    ]
+
+
+def test_get_cwl_activity_time_spent_excludes_idle_gaps(monkeypatch) -> None:
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 0,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": matomo._CWL_IDLE_THRESHOLD_SECONDS + 1,
+                },
+            ],
+        }
+    ]
+
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
+
+    assert result.empty
+
+
+def test_get_cwl_activity_time_spent_keeps_different_activities_isolated(
+    monkeypatch,
+) -> None:
+    """A gap between finishing one activity and starting another must not
+    count towards either activity's total."""
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 0,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 20,
+                },
+                # Browsing back to the library and picking a different activity —
+                # this gap must not be attributed to act-123 or act-456.
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-456",
+                    "timestamp": 200,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-456",
+                    "timestamp": 215,
+                },
+            ],
+        }
+    ]
+
+    result = matomo.get_cwl_activity_time_spent("2024-01-01,2024-01-31", visits=visits)
+
+    assert result.sort_values("activity_id").to_dict("records") == [
+        {"library_id": "42", "activity_id": "act-123", "seconds_spent": 20},
+        {"library_id": "42", "activity_id": "act-456", "seconds_spent": 15},
+    ]
+
+
+def test_get_cwl_activity_time_spent_excludes_other_users(monkeypatch) -> None:
+    visits = [
+        {
+            "userId": "u1",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 0,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "42",
+                    "dimension6": "act-123",
+                    "timestamp": 20,
+                },
+            ],
+        },
+        {
+            "userId": "u2",
+            "actionDetails": [
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Activity Library - Start Click",
+                    "dimension3": "99",
+                    "dimension6": "act-789",
+                    "timestamp": 0,
+                },
+                {
+                    "type": "event",
+                    "eventCategory": "Activity",
+                    "eventAction": "Step Forward Click",
+                    "dimension3": "99",
+                    "dimension6": "act-789",
+                    "timestamp": 20,
+                },
+            ],
+        },
+    ]
+
+    result = matomo.get_cwl_activity_time_spent(
+        "2024-01-01,2024-01-31", frozenset({"u1"}), visits=visits
+    )
+
+    assert result["library_id"].tolist() == ["42"]
+
+
 def test_get_activity_usage_by_id_without_allowed_users_counts_all(monkeypatch) -> None:
     visits = [
         {

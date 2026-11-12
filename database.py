@@ -197,6 +197,38 @@ def get_bundle_configurations(region: str, org_id=None) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_DB_CACHE_TTL)
+def get_cwl_libraries(region: str, org_id=None) -> pd.DataFrame:
+    """
+    Loads each Cognitive Wellbeing Library with its creator and organisation.
+
+    Returns columns: library_id, library_name, creator_email,
+    organisation_name, created_date.
+    """
+    filter_sql, params = _organisation_filter(org_id)
+    sql = text(f"""
+        SELECT
+            cwl.id::text AS library_id,
+            cwl.name AS library_name,
+            u.email AS creator_email,
+            COALESCE(o.name, 'Unassigned / No organisation') AS organisation_name,
+            cwl.created_at::date AS created_date
+        FROM cognitive_wellbeing_libraries cwl
+        JOIN users u ON u.id = cwl.user_id
+        LEFT JOIN organisations o ON o.id = u.organisation_id
+        {filter_sql}
+        ORDER BY organisation_name, library_name, cwl.id
+    """)
+    with get_engine(region).connect() as conn:
+        df = pd.read_sql(sql, conn, params=params)
+    # Without this, pandas infers a datetime64 dtype for created_date, and
+    # Streamlit's TextColumn renders that as a raw epoch-millisecond number
+    # instead of a date — cast to a plain "YYYY-MM-DD" string up front, same
+    # as every other displayed date in this app.
+    df["created_date"] = df["created_date"].astype(str)
+    return df
+
+
+@st.cache_data(ttl=_DB_CACHE_TTL)
 def get_monthly_bundle_creations(
     region: str,
     start_date: date,

@@ -131,6 +131,29 @@ def build_methodology_df(
             "Change Activity Click events (main / warmup / reality orientation) per completed session "
             "in deliver mode, per organisation.",
         ),
+        (
+            "CWL Times Opened",
+            "Count of 'Library Selected From Dropdown' events, including the "
+            "auto-select right after a library is created.",
+        ),
+        (
+            "CWL Distinct Activities Opened",
+            "Count of distinct activities with an 'Activity Library - Start Click' "
+            "event within the library.",
+        ),
+        (
+            "CWL Total/Activity Time Spent",
+            "Approximated via the delta between consecutive 'Step Forward Click' "
+            "events (anchored by the initial Start Click), grouped by "
+            "(library, activity) so browsing between activities is never counted "
+            "as time spent on either. Gaps over 10 minutes are excluded as idle; "
+            "the final interval of each run is not measured, since there is no "
+            "'activity closed' event to bound it.",
+        ),
+        (
+            "CWL Last Used",
+            "Most recent of either a library open or an activity start within it.",
+        ),
     ]
     if org_filter_name is not None:
         rows.insert(1, ("Organisation filter", org_filter_name))
@@ -146,6 +169,9 @@ def build_excel_report(
     activity_usage_table: pd.DataFrame | None = None,
     org_filter_name=None,
     bundle_progression: pd.DataFrame | None = None,
+    cwl_library_summary_table: pd.DataFrame | None = None,
+    cwl_activity_breakdown_table: pd.DataFrame | None = None,
+    cwl_usage_log_table: pd.DataFrame | None = None,
 ) -> bytes:
     """
     Builds an in-memory Excel workbook and returns its raw bytes for Streamlit download.
@@ -156,7 +182,10 @@ def build_excel_report(
         3. User Detail
         4. Monthly Ratings
         5. Activity Usage
-        6. Methodology
+        6. CWL Library Summary
+        7. CWL Activity Breakdown
+        8. CWL Usage Log
+        9. Methodology
 
     All columns are auto-sized up to a maximum width of 50 characters.
 
@@ -168,6 +197,9 @@ def build_excel_report(
         date_range:            "YYYY-MM-DD,YYYY-MM-DD" for the reporting period
         activity_usage_table:  output of merger.build_activity_usage_table (optional)
         bundle_progression:     output of merger.build_bundle_progression (optional)
+        cwl_library_summary_table:    output of merger.build_cwl_library_summary_table (optional)
+        cwl_activity_breakdown_table: output of merger.build_cwl_activity_breakdown_table (optional)
+        cwl_usage_log_table:          output of merger.build_cwl_usage_log_table (optional)
 
     Returns:
         bytes of the .xlsx file
@@ -176,6 +208,12 @@ def build_excel_report(
         activity_usage_table = pd.DataFrame(columns=["Activity Name", "Completions"])
     if bundle_progression is None:
         bundle_progression = pd.DataFrame()
+    if cwl_library_summary_table is None:
+        cwl_library_summary_table = pd.DataFrame()
+    if cwl_activity_breakdown_table is None:
+        cwl_activity_breakdown_table = pd.DataFrame()
+    if cwl_usage_log_table is None:
+        cwl_usage_log_table = pd.DataFrame()
 
     methodology = build_methodology_df(region, date_range, org_filter_name=org_filter_name)
 
@@ -185,6 +223,9 @@ def build_excel_report(
         ("User Detail", user_detail),
         ("Monthly Ratings", monthly_ratings),
         ("Activity Usage", activity_usage_table),
+        ("CWL Library Summary", cwl_library_summary_table),
+        ("CWL Activity Breakdown", cwl_activity_breakdown_table),
+        ("CWL Usage Log", cwl_usage_log_table),
         ("Methodology", methodology),
     ]
 
