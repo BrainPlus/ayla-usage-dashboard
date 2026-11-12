@@ -27,7 +27,7 @@ _QUESTION_CHART_COLORS = {
     "therapists": ["#9467bd", "#17becf", "#8c564b", "#7f7f7f"],
 }
 _INTERNAL_ORGANISATION_NAMES = frozenset(
-    {"Brain+", "Brain+ Tech Organisation"}
+    {"Brain+", "Brain+ Tech Organisation", "Ayla Care", "Ayla"}
 )
 
 _REPORT_DATA_KEYS = (
@@ -680,12 +680,13 @@ with st.sidebar:
         ),
     )
     exclude_internal_organisations = st.checkbox(
-        "Exclude Brain+ organisations",
+        "Exclude Ayla organisations",
         value=True,
         key="exclude_internal_organisations",
         help=(
-            "Excludes Brain+ and Brain+ Tech Organisation from all-organisation "
-            "report results. Turn this off to pull data for either excluded organisation."
+            "Excludes Brain+, Brain+ Tech Organisation, Ayla Care, and Ayla "
+            "from all-organisation report results. Turn this off to pull data "
+            "for any of the excluded organisations."
         ),
     )
 
